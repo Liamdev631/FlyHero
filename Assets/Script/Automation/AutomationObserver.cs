@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Newtonsoft.Json;
+using YARG.Core.Chart;
 using YARG.Core.Logging;
 using YARG.Gameplay;
+using YARG.Gameplay.Player;
 
 namespace YARG.Automation
 {
@@ -30,6 +33,16 @@ namespace YARG.Automation
     /// </summary>
     public static class AutomationObserver
     {
+        /// <summary>Notes to look ahead when emitting the horizon.</summary>
+        private const int HORIZON_NOTES = 16;
+
+        /// <summary>
+        /// How far back to start scanning. Notes are sorted by Time, so we binary-search to
+        /// approximately here and then walk forward; the margin has to exceed the longest
+        /// plausible sustain so a still-ringing long note is not skipped.
+        /// </summary>
+        private const double HORIZON_LOOKBACK_SECONDS = 5.0;
+
         /// <summary>Sample rate. 20 Hz is comfortably finer than the note windows.</summary>
         private const double SAMPLE_INTERVAL_SECONDS = 0.05;
 
@@ -137,6 +150,8 @@ namespace YARG.Automation
                 });
             }
 
+            var horizon = BuildHorizon(gameManager, songTime);
+
             var sample = new
             {
                 // Absolute wall time, so a screen recording started at a known moment can
@@ -147,6 +162,7 @@ namespace YARG.Automation
                 song_time = songTime,
                 song_length = gameManager.SongLength,
                 players,
+                horizon,
             };
 
             string line = JsonConvert.SerializeObject(sample, Formatting.None);
@@ -156,6 +172,80 @@ namespace YARG.Automation
                 File.AppendAllText(_path, line + Environment.NewLine, Utf8NoBom);
                 LinesWritten++;
             }
+        }
+
+        /// <summary>
+        /// Upcoming guitar notes: per note the lane, seconds until it must be hit, its sustain
+        /// length, and whether it is part of a chord. This is the observation a policy needs to
+        /// decide *when* to act.
+        ///
+        /// WARNING: `lane` is GuitarNote.Fret, which is 1-BASED (green..orange = 1..5), while
+        /// the chart and the rest of these tooling use 0-based lanes (0..4). The off-by-one is
+        /// silent, so consumers must subtract 1.
+        ///
+        /// Guitar only for now. Other instruments have their own note types (DrumNote,
+        /// GuitarNote for keys, vocals) and need their own branch; TrackPlayer.NoteTrack lives
+        /// on the generic subclass, so there is no common accessor to reuse.
+        /// </summary>
+        private static List<object> BuildHorizon(GameManager gameManager, double songTime)
+        {
+            var horizon = new List<object>();
+
+            FiveFretGuitarPlayer guitar = null;
+            foreach (var player in gameManager.Players)
+            {
+                if (player is FiveFretGuitarPlayer found)
+                {
+                    guitar = found;
+                    break;
+                }
+            }
+
+            var notes = guitar?.NoteTrack?.Notes;
+            if (notes is null || notes.Count == 0)
+            {
+                return horizon;
+            }
+
+            int start = LowerBound(notes, songTime - HORIZON_LOOKBACK_SECONDS);
+            for (int i = start; i < notes.Count && horizon.Count < HORIZON_NOTES; i++)
+            {
+                var note = notes[i];
+                if (note.TimeEnd < songTime)
+                {
+                    // Entirely in the past, including its sustain.
+                    continue;
+                }
+
+                horizon.Add(new
+                {
+                    lane = note.Fret,
+                    dt = note.Time - songTime,
+                    sustain = note.TimeLength,
+                    chord = note.IsChord,
+                });
+            }
+
+            return horizon;
+        }
+
+        /// <summary>First index whose Time is &gt;= value (notes are sorted by Time).</summary>
+        private static int LowerBound(IReadOnlyList<GuitarNote> notes, double value)
+        {
+            int lo = 0, hi = notes.Count;
+            while (lo < hi)
+            {
+                int mid = lo + (hi - lo) / 2;
+                if (notes[mid].Time < value)
+                {
+                    lo = mid + 1;
+                }
+                else
+                {
+                    hi = mid;
+                }
+            }
+            return lo;
         }
 
         /// <summary>

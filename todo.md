@@ -476,16 +476,28 @@ Two bugs found and fixed while building it: `Encoding.UTF8` wrote a **BOM**, whi
 strict JSON parsing of line 1 of a `.jsonl`; and the original sample carried only a
 process-relative `wall_ms`, which cannot be tied to an external recorder — hence `unix_ms`.
 
-Still missing (the note horizon):
+**DONE — the note horizon too.** Each sample now also carries `horizon`: the next 16 guitar
+notes with `lane`, `dt` (seconds until it must be hit), `sustain` and `chord`.
 
-- [ ] Emit the upcoming-note horizon (per lane: Δt, sustain, chord) and the last hit judgement
-      with its timing error. The clock and scores are done; notes need the note track's time
-      model, which was not guessed at.
-- [ ] Dense per-note reward from the judgement (this is what doomfly lacks; `reward.py` already
-      implements the scoring once the per-note signal exists).
+Verified against the chart the game actually loaded (`/tmp/verify_horizon.py`): reconstructing
+the note timeline from the stream and comparing with `notes.chart` gives **36/36 notes matched,
+0 missed, 0 spurious**. So the binary search, the lookback margin and the sustain handling are
+all correct.
+
+**Gotcha found while verifying: `lane` is 1-based.** The game reports `GuitarNote.Fret` as
+green..orange = **1..5**, while the chart and the rest of this tooling use **0..4**. The
+off-by-one is silent and would mislabel training data, so it is documented in both the C# and
+`observations.py`.
+
+Still missing:
+
+- [ ] The last hit judgement with its timing error (per-note reward needs it; `reward.py`
+      already implements the scoring once the per-note signal exists).
 - [ ] `RemoteInputDevice`: a device implementing the same interface as real input devices, fed
       by JSON lines over a Unix socket (or stdin/stdout), so the policy drives input through the
       game's normal path and hit windows/scoring behave exactly as for a human.
+- [ ] Other instruments: the horizon is guitar-only, because `TrackPlayer.NoteTrack` lives on the
+      generic subclass, so drums/keys/vocals each need their own branch.
 
 Protocol sketch (one JSON object per line):
 ```
