@@ -491,13 +491,34 @@ off-by-one is silent and would mislabel training data, so it is documented in bo
 
 Still missing:
 
-- [ ] The last hit judgement with its timing error (per-note reward needs it; `reward.py`
-      already implements the scoring once the per-note signal exists).
+- [ ] **Calibrate `timing_ms` before using it as reward.** `note_events.jsonl` now records every
+      hit and miss with a signed per-note timing error, but on a run where the bot hits every
+      note perfectly the error reads **+56…+69 ms, mean +62.2 ms** — it should be ≈0. The spread
+      is only 12.5 ms, so this is a **systematic offset, not jitter**: it is the chart↔audio
+      offset (`Song.SongOffsetSeconds`; `GameManager` already does
+      `BackgroundManager.SetTime(_songRunner.SongTime + Song.SongOffsetSeconds)`). Until that is
+      subtracted — or, better, timing is measured against the engine's own hit-window centre
+      (`BasePlayer.HitWindow`) — the reward would penalise flawless play. `reward.py`'s
+      ±25 ms/±70 ms curve is smaller than this bias, so it matters.
 - [ ] `RemoteInputDevice`: a device implementing the same interface as real input devices, fed
       by JSON lines over a Unix socket (or stdin/stdout), so the policy drives input through the
       game's normal path and hit windows/scoring behave exactly as for a human.
 - [ ] Other instruments: the horizon is guitar-only, because `TrackPlayer.NoteTrack` lives on the
       generic subclass, so drums/keys/vocals each need their own branch.
+
+**DONE — per-note hit/miss events.** `note_events.jsonl` records every guitar note event from
+the engine's own `OnNoteHit`/`OnNoteMissed` callbacks: `unix_ms`, `song_time`, `kind`
+(hit/miss), `note_index`, `lane`, `note_time`, `note_length`, `timing_ms`.
+
+Verified: exactly **36 events for 36 notes**, at the correct note times (0.000 → 24.692 s) and
+lanes (1–5). The timing signal is dense and per-note, which is what the reward needs — subject
+to the calibration issue above, and to the same 1-based `lane` convention.
+
+Note on the hook: handlers are deliberately not unsubscribed. The engine belongs to the
+gameplay scene, which is torn down between songs, so a stale engine is discarded along with its
+handler list — and storing the delegate would require coupling to the engine's own named
+delegate type (`NoteHitEvent`), which is not `Action<int, GuitarNote>` and cost a build cycle to
+discover.
 
 Protocol sketch (one JSON object per line):
 ```

@@ -57,7 +57,18 @@ namespace YARG.Automation
         private static readonly object Lock = new();
 
         private static string _path;
+        private static string _eventsPath;
         private static double _nextSampleTime;
+
+        /// <summary>
+        /// The game manager seen by the most recent sample, so the note-hit callbacks can read
+        /// the *current* song time rather than the last sampled one. Sample resolution is 50 ms;
+        /// a timing error measured against a stale clock would be useless.
+        /// </summary>
+        private static GameManager _current;
+
+        /// <summary>The engine we have hooked, so a new song re-subscribes exactly once.</summary>
+        private static object _hookedEngine;
 
         public static bool Enabled => !string.IsNullOrEmpty(_path);
         public static string Path_ => _path;
@@ -74,10 +85,14 @@ namespace YARG.Automation
 
             Directory.CreateDirectory(directory);
             _path = System.IO.Path.Combine(directory, "observations.jsonl");
+            _eventsPath = System.IO.Path.Combine(directory, "note_events.jsonl");
             _nextSampleTime = double.NegativeInfinity;
             LinesWritten = 0;
+            _hookedEngine = null;
+            _current = null;
 
             YargLogger.LogFormatInfo("Automation observations: {0}", _path);
+            YargLogger.LogFormatInfo("Automation note events:  {0}", _eventsPath);
         }
 
         /// <summary>
@@ -90,6 +105,11 @@ namespace YARG.Automation
             {
                 return;
             }
+
+            // Cheap, and must happen every frame: the callbacks need a live clock, and the
+            // engine is a fresh instance per song so the hook has to be re-established.
+            _current = gameManager;
+            EnsureSubscribed(gameManager);
 
             double songTime;
             try
@@ -227,6 +247,88 @@ namespace YARG.Automation
             }
 
             return horizon;
+        }
+
+        /// <summary>
+        /// Hook the guitar engine's note callbacks, once per song.
+        ///
+        /// The player and its engine are rebuilt for every song, so a stale hook would either
+        /// miss notes or double-record them. We keep the engine identity and re-subscribe when
+        /// it changes, unsubscribing the handlers we installed on the previous one.
+        /// </summary>
+        private static void EnsureSubscribed(GameManager gameManager)
+        {
+            if (string.IsNullOrEmpty(_eventsPath))
+            {
+                return;
+            }
+
+            FiveFretGuitarPlayer guitar = null;
+            foreach (var player in gameManager.Players)
+            {
+                if (player is FiveFretGuitarPlayer found)
+                {
+                    guitar = found;
+                    break;
+                }
+            }
+
+            var engine = guitar?.Engine;
+            if (engine is null || ReferenceEquals(engine, _hookedEngine))
+            {
+                return;
+            }
+
+            // Handlers are not unsubscribed: the engine belongs to the gameplay scene, which is
+            // torn down when the song ends, so a stale engine is discarded along with its
+            // handler list. Storing the delegate would need the engine's own named delegate
+            // type, which is not worth the extra coupling.
+            engine.OnNoteHit += (index, note) => RecordNoteEvent("hit", index, note);
+            engine.OnNoteMissed += (index, note) => RecordNoteEvent("miss", index, note);
+            _hookedEngine = engine;
+
+            YargLogger.LogInfo("Automation observer hooked the guitar engine for note events.");
+        }
+
+        /// <summary>
+        /// Write one note event with its timing error.
+        ///
+        /// timing_ms is the signed offset between when the engine judged the input and when the
+        /// chart says the note was due - the dense, per-note signal the reward needs, as opposed
+        /// to the single mean offset the results screen reports. It is measured against the live
+        /// song clock (via _current), not the last 50 ms sample.
+        /// </summary>
+        private static void RecordNoteEvent(string kind, int noteIndex, GuitarNote note)
+        {
+            try
+            {
+                double now = _current is not null ? _current.SongTime : note.Time;
+
+                var record = new
+                {
+                    unix_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    song_time = now,
+                    kind,
+                    note_index = noteIndex,
+                    lane = note.Fret,
+                    note_time = note.Time,
+                    note_length = note.TimeLength,
+                    // Signed: negative = played early, positive = played late. Only meaningful
+                    // for hits; a miss has no input time.
+                    timing_ms = kind == "hit" ? (now - note.Time) * 1000.0 : (double?)null,
+                };
+
+                lock (Lock)
+                {
+                    File.AppendAllText(_eventsPath,
+                        JsonConvert.SerializeObject(record, Formatting.None) + Environment.NewLine,
+                        Utf8NoBom);
+                }
+            }
+            catch (Exception e)
+            {
+                YargLogger.LogException(e, "Automation failed to record a note event.");
+            }
         }
 
         /// <summary>First index whose Time is &gt;= value (notes are sorted by Time).</summary>
