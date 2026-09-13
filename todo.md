@@ -369,6 +369,41 @@ spamming input.
 - **Caveat:** timing is currently applied as the *mean* offset, because per-note offsets are not
   logged. Per-note timing needs the observation/timing stream in P2.
 
+### Frame ↔ song-time alignment: NOT SOLVED by audio (use the game's clock instead)
+
+Pairing a video frame with the notes that were on screen needs the song time at that frame.
+I attacked it via audio, since the recording contains the game's own audio and we have the
+source `song.ogg` (`align.py`). **It does not work, and the reason is now clear.**
+
+The method itself is correct — validated against a synthetic recording with a known offset, it
+recovers the offset to **0.0 ms** at correlation 1.000. But on a real capture every feature
+fails to discriminate:
+
+| feature | Test Two (correct song) | Test One (negative control) |
+|---|---|---|
+| RMS envelope | 0.206 | 0.213 |
+| spectral flux (onsets) | 0.503 | 0.519 |
+| raw waveform (FFT) | 0.257 | 0.267 |
+
+The negative control scores *higher* in all three cases, and all three lock onto ≈4.7–6.0 s —
+where the audio in the recording begins, not where the song begins. So the correlation is
+finding the audio onset, not the song.
+
+Two contributing causes:
+- Our synthetic test songs have a **near-constant loudness envelope**, so RMS has no structure
+  to lock onto (this is why the "onset" feature was added).
+- The game's mix evidently does not contain the song prominently enough to discriminate against
+  everything else on the bus (music volume is 0.75, song volume 1.0, so it is not muted — the
+  audio *is* present, at an RMS comparable to song.ogg, it just does not correlate).
+
+**Fix: stop doing audio forensics; have the game report its own clock.** That is part of P2
+anyway — the observation stream should emit the song position. Then frame→song-time mapping is
+exact, and it also gives the per-note timing the reward function currently approximates with a
+mean offset. `align.py` is kept (it works, and is useful for any real music with dynamics), but
+it is not on the critical path.
+
+`tools/automation/record_song.sh` captures a playthrough with audio and is reusable as-is.
+
 ---
 
 ## 8. TODO — next steps, in order
