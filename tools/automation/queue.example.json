@@ -1,0 +1,9 @@
+{
+  "//": "FlyHero automation queue. 'songDir' is scanned for songs; each entry in 'songs' is matched against a song folder name, a 'Name - Artist' string, or a full folder path.",
+  "songDir": "/home/liamb/projects/FlyHero-build/songs",
+  "songs": [
+    "FlyHero Test One",
+    "FlyHero Test Two",
+    "FlyHero Test Three"
+  ]
+}

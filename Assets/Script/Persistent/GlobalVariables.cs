@@ -99,6 +99,15 @@ namespace YARG
             SettingsManager.LoadSettings();
             InputManager.Initialize();
 
+            // Unattended queue playback: if a queue was supplied on the command line, the
+            // automation manager drives its own boot sequence and loads the gameplay scene
+            // directly, so we skip the menu entirely.
+            if (Automation.AutomationManager.Requested)
+            {
+                Automation.AutomationManager.Begin();
+                return;
+            }
+
             LoadScene(SceneIndex.Menu);
         }
 

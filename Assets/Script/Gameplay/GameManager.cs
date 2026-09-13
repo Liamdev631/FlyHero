@@ -633,6 +633,14 @@ namespace YARG.Gameplay
 
             RecordScores(replayInfo);
 
+            // Unattended automation: log this attempt and roll straight into the next song
+            // in the queue instead of stopping on the score screen.
+            if (Automation.AutomationManager.IsActive)
+            {
+                Automation.AutomationManager.OnSongFinished(this);
+                return true;
+            }
+
             // Go to the score screen
             GlobalVariables.Instance.LoadScene(SceneIndex.Score);
             return true;
