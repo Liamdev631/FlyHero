@@ -1,40 +1,56 @@
-# Gameplay recordings
+# Gameplay capture
 
 Captured from the **prebuilt YARG v0.15.0** running headless on beelink (Xvfb `:1`,
 AMD GPU via RADV). See `tools/automation/run_prebuilt.sh` for the environment
-workarounds required to get the game running on this host.
+workarounds needed to get the game running on this host.
 
 ## gameplay_bot_random.mp4
 
-50 seconds, 1024x768 @ 30fps, video only (this host has no usable hardware audio, so
-songs play through a software `null` ALSA device — there is no sound to capture).
+50 seconds, 1024x768 @ 30fps, video only. This host has no usable hardware audio, so
+songs play through a software `null` ALSA device and there is no audio to capture.
 
-The song is one of the generated test tracks, `FlyHero Test Two`, played solo on
-GUITAR / BEGINNER with a profile whose player is intended to be driven by an external
-random-input policy.
+The song is `FlyHero Test Two` — one of the generated test tracks — played solo on
+GUITAR / BEGINNER, driven by an **external random-input policy**: a stream of random
+fret keys (`1`-`5`) each paired with a random strum (`Up`/`Down`), sent over XTEST.
+That is the "random notes" bot: ~7.5 note attempts per second, no observation of the
+screen at all.
 
-**Caveat — read this before treating it as a baseline:** the score stays at **`0` for
-the whole song**. See `frame_song_end_score0.png` (`0:26 / 0:27`, score `0`).
+### Result — the random policy scores
 
-The random inputs did **not** register any hits. The cause is that the profile was
-created through the UI but its bindings were never initialised — `profiles/bindings.json`
-contains `"Profiles": {}`, so the player has a device assigned but no fret/strum
-bindings, and gameplay actions map to nothing. Menu navigation still responded to
-keyboard (via YARG's default keyboard *menu* bindings), which is why the menus in the
-video react but the note highway does not.
+Taken from the in-game results screen after the run:
 
-So this recording demonstrates **a song playing end to end on this host**, not a bot
-hitting notes. To get a real random-note baseline, initialise the profile's bindings
-first (Profiles → the profile → Edit Binds), then re-run with the random policy on
-frets `1`-`5` + strum `Up`/`Down` (the default keyboard five-fret bindings).
+| Stat | Value |
+| --- | --- |
+| Score | **1,018** |
+| Notes hit | **20 / 112** (~18%) |
+| Accuracy | 17% |
+| Max streak | 3 |
+| Overstrums | 0 |
+
+So blind random input lands roughly one in five notes. That is the number worth keeping
+as the **random-policy baseline** for the planned PyTorch player to beat.
+
+### A caveat about the video's timestamps
+
+The default keyboard five-fret bindings collide with YARG's keyboard *menu* bindings
+(frets `1`-`5` are also menu Green/Red/Yellow/Blue/Orange), so the random stream drives
+the UI as well as the notes. In this recording that caused the policy to land on
+`RESTART SONG` on the results screen, which restarted the song — the last ~10 seconds of
+the video are therefore a second attempt (timer reading `0:08 / 0:27`) with the previous
+attempt's score still on the HUD.
+
+A future run should bind the frets to keys with no menu mapping so the policy can never
+touch the UI, and must only start sending keys once the note highway is visibly scrolling.
 
 ## Frames
 
 | File | Shows |
 | --- | --- |
-| `frame_song_playing.png` | Note highway, five frets, timer `0:20 / 0:27`, score `0` |
-| `frame_song_end_score0.png` | End of song, timer `0:26 / 0:27`, score still `0` |
+| `frame_song_playing.png` | Mid-song: highway, five frets, timer `0:20 / 0:27` |
+| `frame_gameplay_score_1018.png` | Gameplay with **score 1,018**, `0:08 / 0:27` |
+| `frame_results_20_of_112.png` | Results screen: score 1,018, notes 20/112, 17%, max streak 3 |
 
-These files are here only because the filesystem they were generated on is not
-reachable from the chat client. Delete the `recordings/` directory once you've pulled
-them.
+## Note
+
+This directory exists only because the filesystem the capture was made on is not
+reachable from the chat client. It can be deleted once the video has been pulled.
