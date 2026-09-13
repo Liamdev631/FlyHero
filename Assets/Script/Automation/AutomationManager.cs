@@ -7,6 +7,7 @@ using Cysharp.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
+using YARG.Core;
 using YARG.Core.Game;
 using YARG.Core.Logging;
 using YARG.Core.Song;
@@ -71,7 +72,9 @@ namespace YARG.Automation
             _dataDirectory = CommandLineArgs.AutoDataPath;
             if (string.IsNullOrWhiteSpace(_dataDirectory))
             {
-                _dataDirectory = Path.Combine(PathHelper.PersistentDataPath, "automation");
+                // CommandLineArgs.PersistentDataPath, not PathHelper's: the
+                // latter is not public and fails with CS0122.
+                _dataDirectory = Path.Combine(CommandLineArgs.PersistentDataPath, "automation");
             }
 
             AutomationScoreStore.Initialize(_dataDirectory);
@@ -109,8 +112,7 @@ namespace YARG.Automation
                 QueueIndex = 0;
 
                 var first = QueueSongs[0];
-                YargLogger.LogFormatInfo("Automation queue loaded: {0} song(s). Starting with \"{1}\"",
-                    QueueSongs.Count, first.Name);
+                YargLogger.LogInfo($"Automation queue loaded: {QueueSongs.Count} song(s). Starting with \"{first.Name}\"");
 
                 GlobalVariables.State = PersistentState.Default;
                 GlobalVariables.State.PlayingAShow = true;
@@ -137,7 +139,7 @@ namespace YARG.Automation
 
             if (!File.Exists(queuePath))
             {
-                YargLogger.LogFormatError("Automation queue file not found: {0}", queuePath);
+                YargLogger.LogError($"Automation queue file not found: {queuePath}");
                 return false;
             }
 
@@ -175,10 +177,11 @@ namespace YARG.Automation
                 {
                     // Fall back to the folder holding the queue file.
                     _songDirectory = Path.GetDirectoryName(Path.GetFullPath(queuePath));
-                    YargLogger.LogFormatWarning("No songDir set; using the queue file's folder: {0}", _songDirectory);
+                    YargLogger.LogWarning($"No songDir set; using the queue file's folder: {_songDirectory}");
                 }
 
-                YargLogger.LogFormatInfo("Automation queue: {0} entries, songs in {1}", _queueNames.Count, _songDirectory);
+                // Interpolated: LogFormatInfo<T1>/<T2> are ambiguous for (int, string).
+                YargLogger.LogInfo($"Automation queue: {_queueNames.Count} entries, songs in {_songDirectory}");
                 return true;
             }
             catch (Exception e)
@@ -200,8 +203,26 @@ namespace YARG.Automation
 
             YargLogger.LogInfo("Automation scanning for songs...");
             // Full (non-quick) refresh so newly added folders are picked up.
-            await SongContainer.RunRefresh(false);
-            YargLogger.LogFormatInfo("Automation found {0} song(s) in the library", SongContainer.Count);
+            //
+            // RunRefresh's context parameter is optional AND nullable, but
+            // SongSources.LoadSprites dereferences it unconditionally
+            // (context.SetLoadingText), so passing null throws
+            // NullReferenceException. Normal startup always supplies one; our
+            // path does not, so we create one here.
+            try
+            {
+                using var context = new LoadingContext();
+                await SongContainer.RunRefresh(false, context);
+            }
+            catch (Exception e)
+            {
+                // The scan itself usually succeeded (SongContainer is populated);
+                // the failure is in cosmetic steps such as sprite loading. Do not
+                // let that abort an unattended run.
+                YargLogger.LogException(e, "Automation: song scan reported an error; continuing.");
+            }
+
+            YargLogger.LogInfo($"Automation found {SongContainer.Count} song(s) in the library");
         }
 
         /// <summary>
@@ -227,8 +248,11 @@ namespace YARG.Automation
 
             if (missing.Count > 0)
             {
-                YargLogger.LogFormatError("Automation could not find {0} song(s) in the library: {1}",
-                    missing.Count, string.Join(", ", missing));
+                // Interpolated rather than LogFormatError: the generic
+                // LogFormatError<T1>/<T2> overloads are ambiguous for an
+                // (int, string) pair.
+                YargLogger.LogError(
+                    $"Automation could not find {missing.Count} song(s) in the library: {string.Join(", ", missing)}");
             }
 
             if (QueueSongs.Count == 0)
@@ -300,6 +324,21 @@ namespace YARG.Automation
         /// </summary>
         private static void RegisterBotPlayer()
         {
+            // Automation runs the bot alone. Profiles left over from earlier
+            // sessions (e.g. a saved human profile) otherwise stay in the band,
+            // contributing a zero score and making band-level aggregates - and
+            // the all-players-FC flag - meaningless.
+            var stale = PlayerContainer.Players.ToArray();
+            if (stale.Length > 0)
+            {
+                foreach (var player in stale)
+                {
+                    PlayerContainer.DisposePlayer(player);
+                }
+
+                YargLogger.LogInfo($"Automation removed {stale.Length} pre-existing player(s) from the band");
+            }
+
             var profile = PlayerContainer.Profiles.FirstOrDefault(p => p.IsBot && p.Name == BotProfileName);
 
             if (profile is null)
@@ -319,7 +358,7 @@ namespace YARG.Automation
                     return;
                 }
 
-                YargLogger.LogFormatInfo("Automation created bot profile \"{0}\"", BotProfileName);
+                YargLogger.LogInfo($"Automation created bot profile \"{BotProfileName}\"");
             }
 
             profile.CurrentInstrument  = CommandLineArgs.AutoInstrument;
@@ -412,7 +451,9 @@ namespace YARG.Automation
                 var bytes = song.Hash.HashBytes;
                 if (bytes is { Length: > 0 })
                 {
-                    return Convert.ToHexString(bytes).ToLowerInvariant();
+                    // Not Convert.ToHexString: that is .NET 5+, and Unity's
+                    // Mono profile does not provide it.
+                    return BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
                 }
             }
             catch
@@ -445,7 +486,7 @@ namespace YARG.Automation
             QueueIndex = next;
             var song = QueueSongs[next];
 
-            YargLogger.LogFormatInfo("Automation advancing to queue index {0}: \"{1}\"", next, song.Name);
+            YargLogger.LogInfo($"Automation advancing to queue index {next}: \"{song.Name}\"");
 
             GlobalVariables.State.PlayingAShow = true;
             GlobalVariables.State.ShowIndex = next;
@@ -459,8 +500,7 @@ namespace YARG.Automation
             _finished = true;
             RunTimer.Stop();
 
-            YargLogger.LogFormatInfo("Automation run complete: {0} attempt(s) logged across {1} song(s).",
-                _attempts, QueueSongs.Count);
+            YargLogger.LogInfo($"Automation run complete: {_attempts} attempt(s) logged across {QueueSongs.Count} song(s).");
 
             AutomationScoreStore.WriteRunSummary(QueueSongs.Count, _attempts, RunTimer.Elapsed);
 

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Linq;
 using UnityEngine;
+using YARG.Core;
 using YARG.Core.Game;
 
 namespace YARG

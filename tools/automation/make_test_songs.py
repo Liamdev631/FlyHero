@@ -65,20 +65,25 @@ def build_chart(song_name, artist, resolution, bpm, notes_per_difficulty):
     add("}")
 
     # One track per difficulty so the song is selectable on any difficulty.
-    # Tick spacing doubles as the difficulty drops, keeping them roughly aligned.
-    for track, divisor in (("ExpertSingle", 2), ("HardSingle", 3), ("MediumSingle", 4), ("EasySingle", 6)):
-        ticks_per_note = RESOLUTION // divisor
+    #
+    # Every difficulty MUST span the same total time as the audio. Scaling the note
+    # *spacing* by difficulty (the obvious-looking approach) instead compresses the
+    # easier charts into a short window: Easy with 32-tick spacing finished all 112
+    # notes after 8.5s of a 27s song, leaving an empty highway for the rest of the
+    # track. Easier difficulties therefore get *fewer* notes across the same span.
+    span_ticks = (RESOLUTION // 2) * notes_per_difficulty
+    for track, fraction in (("ExpertSingle", 1.0), ("HardSingle", 0.75),
+                            ("MediumSingle", 0.5), ("EasySingle", 0.33)):
+        count = max(8, int(notes_per_difficulty * fraction))
+        ticks_per_note = max(1, span_ticks // count)
         add(f"[{track}]")
         add("{")
-        tick = 0
-        index = 0
-        for _ in range(notes_per_difficulty):
-            lane = (index * 2 + divisor) % 5
+        for index in range(count):
+            tick = index * ticks_per_note
+            lane = (index * 2 + 1) % 5
             # Alternate plain notes and short sustains so both code paths get exercised.
             sustain = ticks_per_note // 2 if index % 4 == 3 else 0
             add(f"  {tick} = N {lane} {sustain}")
-            tick += ticks_per_note
-            index += 1
         add("}")
 
     return "\n".join(lines) + "\n"

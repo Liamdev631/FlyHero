@@ -126,3 +126,7 @@ reload_lock~.meta
 
 # Unity crash dumps
 mono_crash.mem.*.blob
+
+# Python
+__pycache__/
+*.pyc

@@ -115,8 +115,8 @@ namespace YARG.Automation
 
                 LoadTopScores();
 
-                YargLogger.LogFormatInfo("Automation score log: {0}", _jsonlPath);
-                YargLogger.LogFormatInfo("Automation top scores: {0}", _topScoresPath);
+                YargLogger.LogInfo($"Automation score log: {_jsonlPath}");
+                YargLogger.LogInfo($"Automation top scores: {_topScoresPath}");
             }
         }
 
@@ -143,7 +143,7 @@ namespace YARG.Automation
                     _topScores = loaded;
                 }
 
-                YargLogger.LogFormatInfo("Loaded {0} top score entries", _topScores.Count);
+                YargLogger.LogInfo($"Loaded {_topScores.Count} top score entries");
             }
             catch (Exception e)
             {
@@ -211,8 +211,7 @@ namespace YARG.Automation
                     // --- persist dictionary ---
                     File.WriteAllText(_topScoresPath, JsonConvert.SerializeObject(_topScores, SerializerSettings));
 
-                    YargLogger.LogFormatInfo("Automation recorded {0} score {1} (best {2})",
-                        result.SongKey, result.BandScore, best.BestScore);
+                    YargLogger.LogInfo($"Automation recorded {result.SongKey} score {result.BandScore} (best {best.BestScore})");
                 }
                 catch (Exception e)
                 {
