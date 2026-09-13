@@ -460,12 +460,32 @@ of the strum output being intrinsically hard.
 `docs/training-interface.md` specifies both. Today the bot hits every note by *skipping input
 processing in the engine* — that is not a learnable controller.
 
+**DONE — the game now reports its own clock and player state.**
+`Assets/Script/Automation/AutomationObserver.cs` appends to `observations.jsonl` (~17 Hz, tied
+to the frame rate) with `unix_ms`, `wall_ms`, `song_time`, `song_length`, and per player
+`score, combo, notes_hit, total_notes, notes_hit_fraction, stars, is_fc`.
+
+Verified on a real run: 530 samples, `song_time` −1.945 → 29.263 and **monotonic**, wall span
+31294 ms vs song span 31208 ms, score 0 → 4810, notes 36/36.
+
+Read it with `python3 -m flyhero.observations` (or `--at-unix-ms <ms>` to resolve an absolute
+time to a song time). **This is the frame-alignment primitive**: pass a video frame's timestamp
+and get the song position on screen, which is exactly what the audio approach failed to give.
+
+Two bugs found and fixed while building it: `Encoding.UTF8` wrote a **BOM**, which breaks
+strict JSON parsing of line 1 of a `.jsonl`; and the original sample carried only a
+process-relative `wall_ms`, which cannot be tied to an external recorder — hence `unix_ms`.
+
+Still missing (the note horizon):
+
+- [ ] Emit the upcoming-note horizon (per lane: Δt, sustain, chord) and the last hit judgement
+      with its timing error. The clock and scores are done; notes need the note track's time
+      model, which was not guessed at.
+- [ ] Dense per-note reward from the judgement (this is what doomfly lacks; `reward.py` already
+      implements the scoring once the per-note signal exists).
 - [ ] `RemoteInputDevice`: a device implementing the same interface as real input devices, fed
       by JSON lines over a Unix socket (or stdin/stdout), so the policy drives input through the
       game's normal path and hit windows/scoring behave exactly as for a human.
-- [ ] Observation emitter: per input update (~60 Hz), emit the note horizon (lane, Δt, sustain),
-      score, combo, multiplier, star power, health, and the last hit judgement + timing error.
-- [ ] Dense per-note reward from the judgement (this is what doomfly lacks).
 
 Protocol sketch (one JSON object per line):
 ```

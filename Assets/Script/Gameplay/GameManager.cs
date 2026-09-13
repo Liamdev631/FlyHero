@@ -308,6 +308,10 @@ namespace YARG.Gameplay
             BandScore = totalScore;
             EngineManager.UpdateStars();
 
+            // Unattended runs record the game's own state (song clock, player scores)
+            // so downstream tooling does not have to infer a clock it cannot see.
+            YARG.Automation.AutomationObserver.Sample(this);
+
             // End song if needed (required for the [end] event)
             if (_songRunner.SongTime >= SongLength)
             {

@@ -78,6 +78,7 @@ namespace YARG.Automation
             }
 
             AutomationScoreStore.Initialize(_dataDirectory);
+            AutomationObserver.Initialize(_dataDirectory);
 
             YargLogger.LogInfo("Automation mode starting up...");
             BeginAsync().Forget();
