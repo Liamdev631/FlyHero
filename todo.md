@@ -494,12 +494,28 @@ Still missing:
 - [ ] **Calibrate `timing_ms` before using it as reward.** `note_events.jsonl` now records every
       hit and miss with a signed per-note timing error, but on a run where the bot hits every
       note perfectly the error reads **+56…+69 ms, mean +62.2 ms** — it should be ≈0. The spread
-      is only 12.5 ms, so this is a **systematic offset, not jitter**: it is the chart↔audio
-      offset (`Song.SongOffsetSeconds`; `GameManager` already does
-      `BackgroundManager.SetTime(_songRunner.SongTime + Song.SongOffsetSeconds)`). Until that is
-      subtracted — or, better, timing is measured against the engine's own hit-window centre
-      (`BasePlayer.HitWindow`) — the reward would penalise flawless play. `reward.py`'s
-      ±25 ms/±70 ms curve is smaller than this bias, so it matters.
+      is only 12.5 ms, so it is a **systematic offset, not jitter**.
+
+      **Cause NOT yet identified — a first guess was wrong.** I attributed it to
+      `Song.SongOffsetSeconds`, but that is disproved: it derives from song metadata
+      (`SongEntry.cs:172 SongOffsetSeconds => SongOffsetMilliseconds / MILLISECOND_FACTOR`) and
+      our generated `song.ini` has no `delay` key, so it is **0** here. Do not "fix" it by
+      subtracting that.
+
+      The remaining suspects, in order:
+      1. **Which clock the hit is judged against.** `GameManager` feeds
+         `BeatEventHandler.Update(_songRunner.SongTime, _songRunner.VisualTime)` — i.e. there are
+         two clocks, audio and visual. `GameManager.SongTime` is the audio one, and my
+         measurement subtracts `note.Time` from it. If the engine judges input against the visual
+         (or an internally compensated) clock, the difference would show up exactly like this.
+         **Read the engine's hit-test path before changing anything.**
+      2. Audio output latency (a ~60 ms buffer is plausible), which would be a constant and would
+         need subtracting rather than changing the clock.
+      Do not tune a constant to make the mean zero until (1) is ruled out — that would hide a
+      wrong clock behind a fitted number.
+
+      Whatever the cause, `reward.py`'s ±25 ms/±70 ms curve is smaller than this bias, so the
+      reward cannot be trusted until it is resolved.
 - [ ] `RemoteInputDevice`: a device implementing the same interface as real input devices, fed
       by JSON lines over a Unix socket (or stdin/stdout), so the policy drives input through the
       game's normal path and hit windows/scoring behave exactly as for a human.
