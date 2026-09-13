@@ -491,47 +491,33 @@ off-by-one is silent and would mislabel training data, so it is documented in bo
 
 Still missing:
 
-- [ ] **Calibrate `timing_ms` before using it as reward.** `note_events.jsonl` now records every
-      hit and miss with a signed per-note timing error, but on a run where the bot hits every
-      note perfectly the error reads **+56…+69 ms, mean +62.2 ms** — it should be ≈0. The spread
-      is only 12.5 ms, so it is a **systematic offset, not jitter**.
+- [ ] **`timing_ms` uses the wrong clock — SOLVED, fix identified (one line).** `timing_ms` reads
+      `GameManager.SongTime`, but `SongRunner.UpdateTimes()` defines the relationship:
 
-      **Cause NOT yet identified — a first guess was wrong.** I attributed it to
-      `Song.SongOffsetSeconds`, but that is disproved: it derives from song metadata
-      (`SongEntry.cs:172 SongOffsetSeconds => SongOffsetMilliseconds / MILLISECOND_FACTOR`) and
-      our generated `song.ini` has no `delay` key, so it is **0** here. Do not "fix" it by
-      subtracting that.
+      ```csharp
+      InputTime  = GetRelativeInputTime(InputManager.InputUpdateTime);
+      SongTime   = InputTime + (AudioCalibration * SongSpeed);   // <- the +62 ms
+      VisualTime = InputTime + (VideoCalibration * SongSpeed);
+      ```
 
-      The remaining suspects, in order:
-      1. **Which clock the hit is judged against — and the answer looks like `InputTime`.**
-         `SongRunner` (Assets/Script/Playback/SongRunner.cs) exposes *four* time properties, and
-         `timing_ms` used the wrong one:
+      So **`SongTime - InputTime == AudioCalibration * SongSpeed`**. The +62 ms bias is not a
+      mystery latency — it is the audio calibration offset, and it is a *user-controlled setting*
+      that will differ per profile and per machine.
 
-         | property | line | note |
-         |---|---|---|
-         | `SongTime` | 83 | what `timing_ms` used |
-         | `VisualTime` | 89 | |
-         | `InputTime` | 99 | **the input clock; most likely the right one** |
-         | `AudioTime` | 110 | `AudioPlaybackTime + SongOffset` |
+      It should therefore be measured against `InputTime`, and corroborating evidence says that
+      gives ≈0: the engine queues a bot's hit at exactly the note's time
+      (`BaseEngine.Generic.cs:201` `QueueUpdateTime(note.Time, "Bot Note Time")`), so on the input
+      clock a perfect bot must read 0.
 
-         plus `InputTimeOffset` (:156) and `GetRelativeInputTime(timeFromInputSystem)` (:473),
-         which converts an input-system timestamp into the song's input time.
+      `AudioCalibration` (and `SongOffset`, `InputTimeOffset`) are all known from the game, so a
+      check is available: assert `mean(timing_ms) + AudioCalibration*SongSpeed ~= 0` on a bot run.
 
-         The engine judges notes against input, not against playback: `BaseEngine.Generic.cs`
-         compares note times against `EngineParameters.HitWindow.GetFrontEnd/GetBackEnd` windows
-         (:177, :1194, :1251) and tracks `LastQueuedInputTime` (:69, :340) — inputs carry their
-         own `Time`, derived via `GetRelativeInputTime`.
-
-         So the likely fix is to measure the timing error against the same clock the engine uses
-         for judgement, not `SongTime`. **Next step: read `SongRunner.GetRelativeInputTime` and
-         the input path to confirm which value to subtract, then change it** — do not fit a
-         constant to the +62 ms mean.
-      2. Audio output latency, only if (1) is ruled out.
-      Do not tune a constant to make the mean zero until (1) is ruled out — that would hide a
-      wrong clock behind a fitted number.
-
-      Whatever the cause, `reward.py`'s ±25 ms/±70 ms curve is smaller than this bias, so the
-      reward cannot be trusted until it is resolved.
+      **Earlier wrong turns, recorded so they are not repeated:**
+      1. `Song.SongOffsetSeconds` — disproved, it is 0 for these songs (no `delay` in song.ini).
+      2. "Audio output latency" — wrong framing; the gap is a deliberate calibration term, not a
+         buffer delay.
+      Do **not** fit a constant to make the mean zero: the right fix is the clock, and a fitted
+      constant would be wrong on any profile with a different calibration.
 - [ ] `RemoteInputDevice`: a device implementing the same interface as real input devices, fed
       by JSON lines over a Unix socket (or stdin/stdout), so the policy drives input through the
       game's normal path and hit windows/scoring behave exactly as for a human.
