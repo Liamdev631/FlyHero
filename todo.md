@@ -503,14 +503,30 @@ Still missing:
       subtracting that.
 
       The remaining suspects, in order:
-      1. **Which clock the hit is judged against.** `GameManager` feeds
-         `BeatEventHandler.Update(_songRunner.SongTime, _songRunner.VisualTime)` — i.e. there are
-         two clocks, audio and visual. `GameManager.SongTime` is the audio one, and my
-         measurement subtracts `note.Time` from it. If the engine judges input against the visual
-         (or an internally compensated) clock, the difference would show up exactly like this.
-         **Read the engine's hit-test path before changing anything.**
-      2. Audio output latency (a ~60 ms buffer is plausible), which would be a constant and would
-         need subtracting rather than changing the clock.
+      1. **Which clock the hit is judged against — and the answer looks like `InputTime`.**
+         `SongRunner` (Assets/Script/Playback/SongRunner.cs) exposes *four* time properties, and
+         `timing_ms` used the wrong one:
+
+         | property | line | note |
+         |---|---|---|
+         | `SongTime` | 83 | what `timing_ms` used |
+         | `VisualTime` | 89 | |
+         | `InputTime` | 99 | **the input clock; most likely the right one** |
+         | `AudioTime` | 110 | `AudioPlaybackTime + SongOffset` |
+
+         plus `InputTimeOffset` (:156) and `GetRelativeInputTime(timeFromInputSystem)` (:473),
+         which converts an input-system timestamp into the song's input time.
+
+         The engine judges notes against input, not against playback: `BaseEngine.Generic.cs`
+         compares note times against `EngineParameters.HitWindow.GetFrontEnd/GetBackEnd` windows
+         (:177, :1194, :1251) and tracks `LastQueuedInputTime` (:69, :340) — inputs carry their
+         own `Time`, derived via `GetRelativeInputTime`.
+
+         So the likely fix is to measure the timing error against the same clock the engine uses
+         for judgement, not `SongTime`. **Next step: read `SongRunner.GetRelativeInputTime` and
+         the input path to confirm which value to subtract, then change it** — do not fit a
+         constant to the +62 ms mean.
+      2. Audio output latency, only if (1) is ruled out.
       Do not tune a constant to make the mean zero until (1) is ruled out — that would hide a
       wrong clock behind a fitted number.
 
