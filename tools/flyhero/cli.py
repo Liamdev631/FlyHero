@@ -153,6 +153,7 @@ def _cmd_dataset(args: argparse.Namespace) -> int:
                 difficulty=args.difficulty,
                 rate_hz=args.rate,
                 horizon=args.horizon,
+                stack=args.stack,
             )
         except Exception as e:  # noqa: BLE001 - report and keep going
             print(f"{name}: SKIPPED ({e})")
@@ -206,14 +207,14 @@ def _cmd_train(args: argparse.Namespace) -> int:
             seed=args.seed, verbose=args.verbose,
         )
 
-        print(f"  {'output':<8} {'P':>6} {'R':>6} {'F1':>6}  {'acc':>6}  {'always-off acc':>14}  pos")
+        print(f"  {'output':<8} {'P':>6} {'R':>6} {'F1':>6}  {'thr':>5}  {'always-off acc':>14}  pos")
         for name, m in metrics.items():
             flag = ""
             # A strum model that never fires is worse than useless; say so.
             if name == "strum" and m["recall"] < 0.5:
                 flag = "  <-- missed most notes"
             print(f"  {name:<8} {m['precision']:>6.3f} {m['recall']:>6.3f} {m['f1']:>6.3f}  "
-                  f"{m['accuracy']:>6.3f}  {m['baseline_accuracy']:>14.3f}  {m['positives']:>3}{flag}")
+                  f"{m['threshold']:>5.2f}  {m['baseline_accuracy']:>14.3f}  {m['positives']:>3}{flag}")
 
         if metrics["strum"]["recall"] < 0.5:
             exit_code = 1
@@ -303,6 +304,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--difficulty", default="Easy", choices=["Easy", "Medium", "Hard", "Expert"])
     p.add_argument("--rate", type=float, default=100.0, help="controller steps per second")
     p.add_argument("--horizon", type=float, default=1.0, help="observation look-ahead seconds")
+    p.add_argument("--stack", type=int, default=2,
+                   help="observation frames stacked per step (1 = no history; "
+                        "strum is a transition and needs >=2)")
     p.add_argument("--output", "-o", default=str(config.data_dir() / "datasets"))
     p.set_defaults(func=_cmd_dataset)
 

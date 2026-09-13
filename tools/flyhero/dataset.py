@@ -163,11 +163,19 @@ def build(
     difficulty: str = "Easy",
     rate_hz: float = 100.0,
     horizon: float = 1.0,
+    stack: int = 2,
 ) -> Dataset:
     """Build a cloning dataset for one song/difficulty.
 
     ``rate_hz`` is the controller step rate; 100 Hz is finer than the game's
     input update and fine enough that strum timing error stays under ~10 ms.
+
+    ``stack`` is the number of observation frames concatenated per step (frame
+    stacking). This is not optional in practice: the strum decision is a
+    *transition* - a lane's delta goes from positive to zero - and that is
+    invisible in a single frame, because a lane sitting at zero looks the same
+    whether the note just arrived or has been held for half a second. Passing
+    ``stack=1`` reproduces the original behaviour, where strum was unlearnable.
     """
     chart = parse_chart(song_dir)
     section = find_note_section(chart, difficulty)
@@ -248,6 +256,17 @@ def build(
 
         obs[s, LANES * 2] = t / max(duration, 1e-9)
 
+    single_frame_dim = int(obs.shape[1])
+    if stack > 1:
+        # Zero-filled shift, NOT np.roll: roll wraps the last frames round to the
+        # start and would leak the end of the song into the first steps.
+        frames = [obs]
+        for k in range(1, stack):
+            shifted = np.zeros_like(obs)
+            shifted[k:] = obs[:-k]
+            frames.append(shifted)
+        obs = np.concatenate(frames, axis=1)
+
     meta = {
         "song": chart.name,
         "artist": chart.artist,
@@ -263,11 +282,14 @@ def build(
         "steps": steps,
         "duration_seconds": duration,
         "obs_dim": int(obs.shape[1]),
+        "stack": stack,
+        "single_frame_dim": single_frame_dim,
         "obs_layout": [
             *[f"lane{l}_seconds_until_next_note" for l in range(LANES)],
             *[f"lane{l}_seconds_remaining_in_hold" for l in range(LANES)],
             "song_position_normalized",
-        ],
+        ][:single_frame_dim]
+        + ([f"prev_frame_{i}" for i in range(single_frame_dim)] if stack > 1 else []),
     }
 
     return Dataset(x=obs, frets=frets, strum=strum, times=times.astype(np.float32), meta=meta)

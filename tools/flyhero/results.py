@@ -99,13 +99,18 @@ class Attempt:
         )
 
     def player(self, instrument: str | None = None) -> PlayerResult | None:
-        """The result for one instrument (defaults to the highest-scoring one)."""
+        """The result for one instrument (defaults to the highest-scoring one).
+
+        Matching is by substring because the game reports instrument names like
+        "FiveFretGuitar" and "FiveLaneDrums" - an exact match on "guitar" would
+        silently return nothing.
+        """
         if not self.players:
             return None
         if instrument:
             want = instrument.lower()
             for p in self.players:
-                if p.instrument.lower() == want:
+                if want in p.instrument.lower():
                     return p
             return None
         return max(self.players, key=lambda p: p.score)
@@ -174,7 +179,8 @@ def note_stats(
 
     for a in read_attempts(data_dir):
         for p in a.players:
-            if instrument and p.instrument.lower() != instrument.lower():
+            # Substring match: the game reports "FiveFretGuitar", not "guitar".
+            if instrument and instrument.lower() not in p.instrument.lower():
                 continue
 
             key = f"{a.song_key}|{p.instrument}|{p.difficulty}"

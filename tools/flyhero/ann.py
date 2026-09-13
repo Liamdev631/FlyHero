@@ -140,6 +140,24 @@ class MLP:
 TARGETS = ("green", "red", "yellow", "blue", "orange", "strum")
 
 
+def best_threshold(y_true: np.ndarray, y_prob: np.ndarray) -> float:
+    """Threshold that maximises F1 on the given data.
+
+    MUST be chosen on a validation split, never on the test set - tuning the
+    operating point on test is just fitting the test set by another name.
+    """
+    candidates = np.unique(np.concatenate([y_prob, np.array([0.0, 1.0], dtype=y_prob.dtype)]))
+    if candidates.size > 200:
+        candidates = np.quantile(candidates, np.linspace(0, 1, 200))
+
+    best, best_f1 = 0.5, -1.0
+    for thr in candidates:
+        m = score(y_true, y_prob, float(thr))
+        if m.f1 > best_f1:
+            best, best_f1 = float(thr), m.f1
+    return best
+
+
 def train_and_evaluate(
     train_x: np.ndarray,
     train_y: np.ndarray,
@@ -150,16 +168,32 @@ def train_and_evaluate(
     pos_weight: float = 10.0,
     seed: int = 0,
     verbose: bool = False,
+    val_fraction: float = 0.2,
 ) -> tuple[dict, MLP]:
-    """Train on one set of songs, test on a held-out song. Returns (metrics, model)."""
-    model = MLP(train_x.shape[1], hidden, train_y.shape[1], pos_weight=pos_weight, seed=seed)
-    model.fit(train_x, train_y, epochs=epochs, seed=seed, verbose_every=50 if verbose else 0)
+    """Train on some songs, tune thresholds on a held-out slice, test on another song.
 
-    prob = model.predict_proba(test_x)
+    Thresholds are tuned on a validation slice carved out of the *training*
+    songs, then frozen and applied to the test song. That keeps the test set
+    clean while still giving the sparse strum output a fair operating point.
+    """
+    n = train_x.shape[0]
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(n)
+    n_val = max(1, int(n * val_fraction))
+    val_idx, fit_idx = order[:n_val], order[n_val:]
+
+    model = MLP(train_x.shape[1], hidden, train_y.shape[1], pos_weight=pos_weight, seed=seed)
+    model.fit(train_x[fit_idx], train_y[fit_idx], epochs=epochs, seed=seed,
+              verbose_every=50 if verbose else 0)
+
+    val_prob = model.predict_proba(train_x[val_idx])
+    test_prob = model.predict_proba(test_x)
+
     out = {}
     for i, name in enumerate(TARGETS):
-        m = score(test_y[:, i], prob[:, i])
-        base = score(test_y[:, i], np.zeros_like(prob[:, i]))  # "never play" baseline
+        thr = best_threshold(train_y[val_idx, i], val_prob[:, i])
+        m = score(test_y[:, i], test_prob[:, i], thr)
+        base = score(test_y[:, i], np.zeros_like(test_prob[:, i]))  # "never play" baseline
         out[name] = {
             "precision": m.precision,
             "recall": m.recall,
@@ -170,5 +204,6 @@ def train_and_evaluate(
             "fn": m.fn,
             "baseline_accuracy": base.accuracy,
             "positives": int(test_y[:, i].sum()),
+            "threshold": thr,
         }
     return out, model

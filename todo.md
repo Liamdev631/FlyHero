@@ -323,22 +323,96 @@ rule (ANN pretraining needs autograd), and the fixed sensory proxy (use structur
 
 ---
 
+## 7b. Observation and reward design (user-directed)
+
+Two decisions from the user, both implemented:
+
+### Crop frames to the instrument's highway (`vision.py`)
+
+The game draws one highway **per instrument** plus shared HUD (score, stars, timer,
+star-power meter, multiplier). Feeding the whole frame is wrong twice over: most pixels are
+irrelevant, and the HUD is *shared* between instruments while the highway is not — so the same
+pixels would mean different things for different instruments. Cropping to the instrument's own
+highway fixes both and makes the input unambiguous per instrument.
+
+- Measured region for a 1024×768 frame, guitar, 1 player: **x 330..700, y 415..768** (370×353).
+  The highway is a perspective trapezoid (x 440–580 at the horizon, 330–700 at the fret line),
+  so `Region` carries the top/bottom extents and interpolates the 5 lane centres.
+- `to_policy_input()` crops → resizes to 84×84 → normalises to float32 **CHW** in [0,1].
+- Verify a region with `python -m flyhero.vision --frame <png>` (writes `*_crop.png` and
+  `*_overlay.png` beside the frame).
+- **Caveat:** the `3×` multiplier badge is drawn *on the play field*, so it falls inside the
+  crop. Either mask it or accept it as legitimate state (it does carry information).
+- **Caveat:** regions are resolution/layout-specific. A different resolution, window mode,
+  highway tilt or note speed invalidates them — re-measure.
+
+### Reward from the game's own judgements (`reward.py`)
+
+| behaviour | signal in our logs | reward |
+|---|---|---|
+| hit the note | `NotesHit` | `+1.0`, scaled down by timing error |
+| miss the note | `NotesMissed` | `−1.0` |
+| hit the wrong note | `Overstrums`, `GhostInputs` | `−1.0` |
+| right note, wrong timing | note offset (we measured ≈ **−15 ms**) | falls from `+1.0` and goes negative |
+
+Timing curve: full credit inside **25 ms**; linear falloff to **−1.0** at **70 ms**; crosses
+zero at ≈47 ms. So a correct note played sloppily late is a genuine punishment, per the spec.
+
+Using the game's judgements matters: a hand-rolled "was that right?" check would disagree with
+the engine's hit windows, and the policy would end up optimising a different game than the one
+being scored. `Overstrums`/`GhostInputs` are what stop a policy collecting every hit by
+spamming input.
+
+- Preview on real attempts: `python -m flyhero.reward --instrument guitar`.
+- **Caveat:** `PERFECT_MS`/`HIT_WINDOW_MS` are placeholders. YARG's real windows vary by
+  difficulty and hit-window settings and must be read from the engine before this is trusted.
+- **Caveat:** timing is currently applied as the *mean* offset, because per-note offsets are not
+  logged. Per-note timing needs the observation/timing stream in P2.
+
+---
+
 ## 8. TODO — next steps, in order
 
-### P0 — Make strum reliable (current blocker)
+### P0 — The synthetic cloning task is a strawman (diagnosed, needs reframing)
 
-The ANN learns frets (F1 0.85–0.97) but strum is unstable (0.47 / 0.00 / 0.66), and on the
-Test Three hold-out it never fired at all. Strum is what actually triggers note hits.
+**Finding (decisive):** a two-line hand-coded rule scores **F1 0.973** (P 0.989, R 0.957)
+on the strum label across all three songs, where the network scores 0.05–0.46:
 
-- [ ] Diagnose why strum fails on Test Three. Prime suspects: (a) the onset label is a single
-      1-step spike (10 ms) in a 1.3%-positive stream — too sparse and too precise; (b) the
-      observation gives `seconds_until_next_note` but not its **sign/derivative**, so the model
-      cannot tell "approaching" from "just passed".
-- [ ] Try widening the strum label to a small window (e.g. ±1 step) or predicting
-      `time_to_next_note_bucket` instead of a raw bit.
-- [ ] Add observation features: derivative of the next-note delta, and a per-lane "note just
-      entered the hit window" flag.
-- [ ] Re-run `train-ann` and require strum recall > 0.9 on **every** held-out song.
+```
+rule: strum when min(lane delta) crosses INTO one step   ->  F1 0.984 / 0.941 / 0.986
+net:                                                     ->  F1 0.464 / 0.074 / 0.054
+```
+
+Run it: `python3 -m flyhero.rule_baseline`.
+
+**Why this matters:** the observation *contains the answer*. `seconds_until_next_note` has
+the label as a direct function of it, so this dataset measures whether a net can rediscover
+arithmetic that is already in its inputs — not whether it can learn to play. The earlier
+"frets F1 0.85–0.97" numbers are inflated by exactly the same flaw and are not evidence of
+learning either.
+
+Two things were tried first and **neither fixed it** (keep the code, they are still correct):
+frame stacking (`--stack 2`, because strum is a *transition* and invisible in one frame) and
+per-output threshold calibration on a validation split. Stacking is nonetheless *required*:
+the rule above needs the previous frame to express the transition.
+
+**What to do instead:**
+
+- [ ] Stop tuning this benchmark. It cannot fail in an informative way.
+- [ ] Rebuild the observation from **what the game actually shows a player** — note-highway
+      state (or pixels) with realistic latency/jitter — so the label is *not* a closed-form
+      function of the input. That is the task a policy must actually solve.
+- [ ] Keep the rule as a **deterministic baseline**: F1 0.97 offline means it should play the
+      chart near-perfectly in game, which makes it an excellent test of the in-game interface
+      (P2) — if the rule scores ~100% in game, the plumbing is right and any shortfall is the
+      policy's.
+- [ ] Re-evaluate the ANN only against the game-derived observation.
+
+### P0b (original, superseded) — strum reliability
+
+Strum was the suspected blocker: net F1 0.47 / 0.00 / 0.66, and on Test Three it never fired.
+Superseded by the finding above — the net's failure was a symptom of the strawman dataset, not
+of the strum output being intrinsically hard.
 
 ### P1 — Install PyTorch and move to the real ANN
 
