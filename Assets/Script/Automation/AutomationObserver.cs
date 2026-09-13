@@ -295,19 +295,31 @@ namespace YARG.Automation
         ///
         /// timing_ms is the signed offset between when the engine judged the input and when the
         /// chart says the note was due - the dense, per-note signal the reward needs, as opposed
-        /// to the single mean offset the results screen reports. It is measured against the live
-        /// song clock (via _current), not the last 50 ms sample.
+        /// to the single mean offset the results screen reports.
+        ///
+        /// CLOCK: it must be measured against GameManager.InputTime, NOT SongTime. The engine is
+        /// stepped on the input clock (BasePlayer.GameplayUpdate -> UpdateInputs(InputTime)), and
+        /// SongRunner defines
+        ///     SongTime = InputTime + (AudioCalibration * SongSpeed)
+        /// so reading SongTime added the whole audio calibration offset - a constant +62 ms on
+        /// this profile that would be different on any other, and which made a perfect bot look
+        /// 62 ms late. Both clocks are recorded so the relationship stays checkable:
+        /// `calibration_ms` should equal AudioCalibration*SongSpeed on every event.
         /// </summary>
         private static void RecordNoteEvent(string kind, int noteIndex, GuitarNote note)
         {
             try
             {
-                double now = _current is not null ? _current.SongTime : note.Time;
+                double inputNow = _current is not null ? _current.InputTime : note.Time;
+                double songNow = _current is not null ? _current.SongTime : note.Time;
 
                 var record = new
                 {
                     unix_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                    song_time = now,
+                    input_time = inputNow,
+                    song_time = songNow,
+                    // Should be constant; if it is not, one of the clocks moved underneath us.
+                    calibration_ms = (songNow - inputNow) * 1000.0,
                     kind,
                     note_index = noteIndex,
                     lane = note.Fret,
@@ -315,7 +327,7 @@ namespace YARG.Automation
                     note_length = note.TimeLength,
                     // Signed: negative = played early, positive = played late. Only meaningful
                     // for hits; a miss has no input time.
-                    timing_ms = kind == "hit" ? (now - note.Time) * 1000.0 : (double?)null,
+                    timing_ms = kind == "hit" ? (inputNow - note.Time) * 1000.0 : (double?)null,
                 };
 
                 lock (Lock)

@@ -491,8 +491,49 @@ off-by-one is silent and would mislabel training data, so it is documented in bo
 
 Still missing:
 
-- [ ] **`timing_ms` uses the wrong clock — SOLVED, fix identified (one line).** `timing_ms` reads
-      `GameManager.SongTime`, but `SongRunner.UpdateTimes()` defines the relationship:
+- [ ] **`timing_ms` clock fix: applied but UNVERIFIED — the run lost its note events entirely.**
+      The fix is one line (read `GameManager.InputTime` instead of `SongTime`; see the
+      `UpdateTimes()` relationship below), and it compiles. But the verification run produced
+      **no `note_events.jsonl` at all** — while the *previous* build produced all 36 events with
+      nominally identical subscription code.
+
+      Evidence from the run (`Player.log`, this run starts at line 401):
+      - `Automation mode starting up` → queue loaded → 3 songs scanned → bot registered: all fine
+      - `AutomationObserver.cs:EnsureSubscribed:290 hooked the guitar engine for note events` —
+        **the subscription did install**
+      - `Automation recorded … score 4810` and `run complete` — **the song played and scored
+        normally**, so the session itself was healthy
+      - `note_events.jsonl` absent, and **zero** `failed to record a note event` exceptions, so
+        the handler's own catch never fired — meaning the handler never ran at all
+
+      So the events vanished without an error. Not explained yet. Candidates, in order:
+      1. **The handler is attached to a discarded engine.** `EnsureSubscribed` only re-subscribes
+         when the engine identity changes, and it logged *once*. If the player/engine is replaced
+         after that point during song start, the live engine would carry no handler and the prior
+         build would only have worked by timing luck. Instrument this before changing anything:
+         log the engine's identity (or a per-song counter of handler invocations).
+      2. Something about the extra field reads (`InputTime`, `calibration_ms`) throwing *before*
+         the append, with the catch's own logging failing. Weak — the catch logs elsewhere fine —
+         but not excluded.
+      3. A stale assembly: confirm the build actually recompiled rather than reusing a cached
+         assembly, since the observable behaviour did not change as expected.
+
+      Also seen: the player **aborts (SIGABRT, exit 134) at shutdown**, in the same
+      `PauseMenuManager.PopAllMenus` null-reference inside `GameManager.OnDestroy` that appeared
+      at the very start of this project. Pre-existing and harmless to the run (the score is
+      written before it), but it means every run exits non-zero, which will need handling before
+      any script treats the exit code as success.
+
+Then, once events are flowing again, the check to run is:
+
+```
+assert mean(timing_ms) + AudioCalibration*SongSpeed ~= 0 on a bot run
+```
+
+with `AudioCalibration` known from the game, and `calibration_ms` recorded per event as an
+independent cross-check (it should be a constant).
+
+      **The underlying clock relationship, for reference** — `SongRunner.UpdateTimes()` defines it:
 
       ```csharp
       InputTime  = GetRelativeInputTime(InputManager.InputUpdateTime);
