@@ -97,14 +97,20 @@ def run_standalone(model, params, exc: list, exc2: list, build_dir: Path) -> dic
     and repeated frames cost only the run.
     """
     from brian2 import Network, device as brian_device, set_device
+    import time as _t
 
     brian_device.reinit()
     brian_device.activate()
     set_device("cpp_standalone", build_on_run=False)
 
+    t0 = _t.perf_counter()
     neu, syn, spk_mon = model.create_model(COMPLETENESS, CONNECTIVITY, params)
+    t_create = _t.perf_counter() - t0
     poi_inp, neu = model.poi(neu, exc, exc2, params)
-    if not spk_mon:
+    # NB: test `is None`, not truthiness. A freshly created SpikeMonitor has recorded no
+    # spikes yet, so `not spk_mon` is True and a truthiness check aborts the run *after*
+    # paying the full network-construction cost.
+    if spk_mon is None:
         raise RuntimeError("standalone mode needs the SpikeMonitor for the DN readout")
     net = Network(neu, syn, spk_mon, *poi_inp)
     net.run(duration=params["t_run"])
@@ -113,8 +119,15 @@ def run_standalone(model, params, exc: list, exc2: list, build_dir: Path) -> dic
         import shutil
 
         shutil.rmtree(build_dir)
+    t1 = _t.perf_counter()
     brian_device.build(directory=str(build_dir), run=False, with_output=False)
+    t_build = _t.perf_counter() - t1
+    t2 = _t.perf_counter()
     brian_device.run(with_output=False)
+    t_run = _t.perf_counter() - t2
+    # The split matters: create is per-network (currently minutes), build compiles once,
+    # and run is the only cost a repeated stimulus frame should pay.
+    print(f"  [phase] network create {t_create:.2f}s | compile {t_build:.2f}s | run {t_run:.3f}s")
     return model.get_spk_trn(spk_mon)
 
 
