@@ -83,6 +83,41 @@ def descending_indices(ann=None) -> dict:
     return out
 
 
+def run_standalone(model, params, exc: list, exc2: list, build_dir: Path) -> dict:
+    """Run the model in Brian2 **cpp_standalone** mode: generate C++, build, then execute.
+
+    This is the mode fly-brain's own benchmark uses for its Brian2 (CPU) numbers, and the
+    difference is enormous. ``model.run_trial`` uses Brian2's *runtime* mode, which
+    interprets the equations per timestep in Python; with ~15M synapses that is hundreds of
+    times slower (a 10 ms run was still going after 22 minutes). Compiled standalone builds
+    the network once and then runs native code, so the same work takes seconds.
+
+    Order matters: ``net.run(duration=...)`` declares the duration, ``device.build(run=False)``
+    compiles without executing, then ``device.run()`` executes - so the build is paid once
+    and repeated frames cost only the run.
+    """
+    from brian2 import Network, device as brian_device, set_device
+
+    brian_device.reinit()
+    brian_device.activate()
+    set_device("cpp_standalone", build_on_run=False)
+
+    neu, syn, spk_mon = model.create_model(COMPLETENESS, CONNECTIVITY, params)
+    poi_inp, neu = model.poi(neu, exc, exc2, params)
+    if not spk_mon:
+        raise RuntimeError("standalone mode needs the SpikeMonitor for the DN readout")
+    net = Network(neu, syn, spk_mon, *poi_inp)
+    net.run(duration=params["t_run"])
+
+    if build_dir.exists():
+        import shutil
+
+        shutil.rmtree(build_dir)
+    brian_device.build(directory=str(build_dir), run=False, with_output=False)
+    brian_device.run(with_output=False)
+    return model.get_spk_trn(spk_mon)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--frame", type=Path, required=True, help="full game frame PNG")
@@ -92,6 +127,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--r-poi", type=float, default=150.0, help="Poisson Hz for the bright (driven) set")
     ap.add_argument("--r-poi2", type=float, default=15.0, help="Poisson Hz for the dim set")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--mode", choices=("standalone", "runtime"), default="standalone",
+                    help="brian2 cpp_standalone (compiled, default) or runtime (interpreted, slow)")
     args = ap.parse_args(argv)
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -142,9 +179,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     # 2. run the model
     model = load_model()
     params = build_params(model, args.t_run, 1, args.r_poi, args.r_poi2)
-    print(f"running fly-brain LIF: {args.t_run} ms over 138,639 neurons ...")
-    spk = model.run_trial(exc, exc2, [], COMPLETENESS, CONNECTIVITY, params)
-    print(f"neurons that spiked: {len(spk)}")
+    print(f"running fly-brain LIF ({args.mode}): {args.t_run} ms over 138,639 neurons ...")
+    import time as _time
+
+    t0 = _time.perf_counter()
+    if args.mode == "standalone":
+        spk = run_standalone(model, params, exc, exc2, args.out / "standalone-build")
+    else:
+        spk = model.run_trial(exc, exc2, [], COMPLETENESS, CONNECTIVITY, params)
+    wall = _time.perf_counter() - t0
+    spk = spk or {}
+    print(f"simulation wall time: {wall:.2f}s for {args.t_run} ms of brain time")
+    print(f"neurons that spiked: {len(spk) if spk else 0}")
 
     # 3. read out the descending neurons
     report: dict = {"t_run_ms": args.t_run, "n_spiking": len(spk),
