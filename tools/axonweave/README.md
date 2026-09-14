@@ -62,6 +62,19 @@ This is the measurement that decides whether training must stay in native code.
 
 Run: `/tmp/awvev/bin/python bench_sparse.py`
 
+### `ann2snn.py`
+
+Tests the ANN→SNN conversion path (D-008): train with ReLU, convert to IF.
+
+- **Part A** — AxonWeave's `lif_step` cannot be tuned into IF by raising tau: the leak
+  is hardcoded, so the rate stays 0 at I=0.5 for tau = 1, 5, 100 and 1e6.
+- **Part B** — IF rate matches ReLU(I) to within 0.001 on I ∈ [0,1]; LIF has a dead
+  zone (`LIF ≈ ReLU(I − 1)` vs `IF ≈ ReLU(I)`). IF, not LIF, is the correct target.
+- **Part C** — full MLP conversion, XOR task: ANN test acc 0.960 → SNN 0.822 at T=500,
+  plateauing after T≈100; soft reset beats hard reset at every T.
+
+Run: `/tmp/awvev/bin/python ann2snn.py`
+
 ## Headline results
 
 | Measurement | Result |
@@ -71,5 +84,9 @@ Run: `/tmp/awvev/bin/python bench_sparse.py`
 | Learning with O(1) input currents | none — network totally silent |
 | `torch.sparse.mm` vs CSR (1.0M nnz) | 32.4 ms vs 0.64 ms — **50x slower** |
 | `torch.sparse.mm` vs CSR (10.0M nnz) | 363 ms vs 14.0 ms — **26x slower** |
+| IF rate vs ReLU(I) on I ∈ [0,1] | matches to within 0.001 |
+| LIF at tau=1e6, I=0.5 | rate 0.000 — **cannot** be tuned into IF |
+| ReLU ANN → IF SNN (XOR, T=500) | 0.960 → 0.822, plateauing after T≈100 |
 
-Conclusion recorded in `DECISIONS.md` as E-001 (evaluated, not decided).
+Conclusions recorded in `DECISIONS.md` as E-001 (evaluated, not decided) and
+D-008 (ANN→SNN conversion by ReLU→IF, 2026-09-14).

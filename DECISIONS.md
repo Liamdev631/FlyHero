@@ -10,6 +10,49 @@ and marked, never silently edited away.
 
 ---
 
+## D-008 — ANN→SNN migration by conversion: train ReLU, convert to IF (2026-09-14)
+
+**Decision.** The ANN→SNN migration is done by **conversion**, not surrogate-gradient
+BPTT. Train the policy as an ANN whose activations are **ReLU**, then convert the
+trained weights to an **IF** (integrate-and-fire, leak term removed) spiking network
+by rate coding.
+
+**Reasoning (user's).** IF with no leak term is the unit whose firing rate equals the
+ReLU of its input, so the trained ANN transfers without retraining the spiking net.
+
+**Verified before recording** (torch 2.14.0+cpu; `tools/axonweave/ann2snn.py`):
+
+- **The equivalence holds.** IF rate matches ReLU(I) to within 0.001 for I ∈ [0,1]
+  over T=1000 steps. Above I=1 the rate saturates at 1 spike/step, so activations
+  *must* be normalised into [0,1] — a requirement, not a refinement.
+- **LIF is not equivalent and cannot be tuned into IF.** `lif_step` hardcodes the
+  leak as `dv = (-(v - v_rest) + I)*dt/tau`; steady state is `v_ss = v_rest + I`, so
+  it fires only when `I ≥ v_th − v_rest`. Measured rate at I=0.5 was exactly **0** for
+  tau = 1, 5, 100 and 1e6. Raising tau cannot remove the dead zone — the leak term has
+  to be deleted. `LIF ≈ ReLU(I − 1)`, `IF ≈ ReLU(I)`.
+- Full MLP conversion works: XOR task, ANN test acc 0.960 → SNN **0.822** at T=500.
+  Error falls to ~T=100 then plateaus; the residual gap does not close with more
+  timesteps (systematic quantisation/offset bias, the known ANN→SNN conversion error —
+  needs bias correction to close).
+- Soft reset beats hard reset at every T (0.822 vs 0.780 at T=500).
+
+**Consequence — this changes the simulated biology.** Dropping the leak term removes
+membrane time-constant dynamics from every neuron: the substrate stops being a LIF
+network and becomes a bank of pure integrators. Recorded explicitly because this is a
+change to the model's biology, not an implementation detail.
+
+**What AxonWeave lacks — all four items are needed:**
+1. No IF unit exists — `DYNAMICS = {lif, adaptive_lif, rate}`, those three only.
+2. `Rate` is linear (`baseline + gain*I`), *not* ReLU — "train with ReLU" requires an
+   explicit `nn.ReLU` after the connectome layer.
+3. Only hard reset (`v_reset`); no reset-by-subtraction.
+4. Reaching IF requires a kernel change (delete the leak term): ~5 lines Rust, or
+   ~3 lines in a torch port.
+
+**Status.** Recorded, not yet implemented.
+
+---
+
 ## D-007 — Output decoding: motor-neuron clusters, linearly decoded (2026-09-14)
 
 **Decision.** The decoded output is **not** single neurons. Take **distinct clusters of
