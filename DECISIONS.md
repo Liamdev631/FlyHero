@@ -117,6 +117,28 @@ needed), or stay on male-CNS (motor neurons in the same graph, but the training 
 unwired and Rust-gated). This is a change to what the model *is*, so it is recorded for
 review rather than resolved silently.
 
+**Update (later the same day, on evidence) — the stated blocker no longer applies.**
+This entry and E-002 reject AxonWeave partly on the grounds that *"this box has no
+`cargo`"*, and the rubric above rules out *"Rust-toolchain-gated projects ... on hardware
+grounds."* Both are now out of date:
+
+- **Rust was installed on this box** — `rustc 1.98.1` / `cargo 1.98.1` user-locally via
+  rustup (a system-wide install is queued on the kanban board for the `admin` profile).
+  A PyO3 crate (`tools/axonweave/fastsparse`) was built with it.
+- **More decisively, the male-CNS training path is not Rust-gated at all.** D-009 was
+  implemented and run *without any Rust in the training loop* — scipy sparse-sparse
+  propagation on the spike tensor plus a straight-through surrogate under torch autograd —
+  reaching **41.7%** MNIST test accuracy (see D-009).
+
+So the open point above is now a genuine choice **on merit** — male-CNS trains today, with
+photoreceptor → motor-neuron routing inside one graph — rather than being forced by a
+missing toolchain. This note does **not** overturn D-010: the rest of its case is untouched
+and still stands (fly-brain ships a working arctan surrogate, is maintained and
+peer-reviewed, has a GeNN rollout path measured above realtime, and its per-row
+`nn.Parameter` gap is a smaller change than rewiring a substrate that connects to nothing).
+Recorded only because a decision premise cited here has been falsified, and a later reader
+should not re-derive the conclusion from it.
+
 ---
 
 ## D-009 — MNIST test task on the fly CNS: photoreceptor in, motor neuron out (2026-09-14)
@@ -175,7 +197,32 @@ forward, 23 hops back). The optic lobe intrinsic population is traversed 89,396 
 identified as missing from AxonWeave — because a hard spike has zero gradient and
 would leave the input projection untrainable.
 
-**Status.** Implementing.
+**Status.** Implemented and run. After 3 epochs (of 5 planned; stopped on the user's
+instruction): **test accuracy 41.7%** on MNIST (chance 10%), loss falling 1.946 → 1.712.
+Only **4,794,021 parameters train** — the `784→6,098` input projection (99.7% of them)
+and the `708→10` readout. The 26,028,386-edge connectome carries **zero** trainable
+parameters.
+
+**The input constraint was verified by ablation, not by inspection.** Zeroing the input
+drive silences the network *exactly* — spike rate **0.000000** vs 0.033508 normally. A LIF
+at `v_rest` with no input current has `dv = 0` and can never reach threshold, so total
+silence proves the 6,098 photoreceptors are the **only** entry point into the CNS. The
+readout is likewise confirmed to read exactly the 708 motor neurons (0.37% of the CNS).
+
+**The "training path unwired / Rust-gated" premise no longer holds.** A working training
+stack was built in this session — `tools/axonweave/mnist_cns.py`: scipy sparse-sparse
+propagation on the spike tensor + a straight-through surrogate under torch autograd.
+**No Rust is required in the training loop.** See the update note under D-010.
+
+**Substrate validated.** `conn.feather` covers *all* EM segments (Janelia: *"segment-to-
+segment connection strengths for all segments in the dataset"*), which is why 83% of its
+151,856,684 rows are dropped when filtering to curated bodies. Keeping only curated↔curated
+yields **26,028,386** connections, matching Janelia's documented ~25,600,000 for
+male-cns:v1.0 to within **1.7%**, with zero duplicate (pre, post) pairs.
+
+**Known caveat.** The overfitting question was not settled: only training *loss* was
+logged, not training *accuracy*, so train/test curves cannot be compared. Overfitting
+capacity sits in the 4.78M-parameter input projection, not the 708-output bottleneck.
 
 ---
 
