@@ -112,6 +112,67 @@ vocals, keys) can follow.
 
 ---
 
+## E-001 — AxonWeave evaluated as a candidate simulator (2026-09-14)
+
+**Status: evaluated, NOT decided.** No design choice has been made. This entry
+records measurements so the finding is not lost; if a decision follows it gets its
+own `D-` entry.
+
+**What it is.** `dhakalnirajan/axonweave` v0.1.0 — a Python/Rust library wrapping
+the Janelia **MaleCNS v1.0** connectome (166,700 neurons, ~25.6M edges) as a
+trainable substrate. This is the same connectome D-005 already draws the VNC
+foreleg motor neurons from; it is *not* FlyWire v783, so it does not replace
+fly-brain (D-004).
+
+**Computational units — three, configurable, not fixed:**
+- `Rate` — `baseline + gain * I`. No state, no time. **This is the default.**
+- `LIF` / `AdaptiveLIF` — genuine spiking: threshold crossing, reset, refractory.
+- `ConnectomeLayer` — pure sparse matmul, no nonlinearity.
+
+ANN-practical and SNN-capable, but not SNN-trainable as shipped.
+
+**Measured 2026-09-14** (torch 2.14.0+cpu, Ryzen 7 6800U; scripts in
+`tools/axonweave/`):
+
+1. Surrogate gradients are computed in Rust and wired to nothing. `spike_gradient`
+   appears only in `dynamics/spiking.py` and `tests/`. The project says so itself,
+   `docs/development/IMPLEMENTATION_GAP.md` §7: *"the surrogate-gradient kernels
+   exist (`surrogate.rs`), but wiring them into a differentiable framework forward
+   pass ... is still pending."*
+2. Both framework adapters detach — `frameworks/torch/block.py:82` and
+   `jax/block.py:118` round-trip through NumPy, so the connectome receives zero
+   gradient. Their own warning AXW007 admits it.
+3. **Surrogate-gradient BPTT works once implemented.** A 1:1 port of
+   `dynamics.rs` / `surrogate.rs` into PyTorch with a custom `autograd.Function`
+   trains to 100% accuracy (loss 0.694 → 0.051), with gradients reaching the sparse
+   edge weights.
+4. **`torch.sparse.mm` is 26–50× slower than a CSR kernel** (32.4 ms vs 0.64 ms at
+   1.0M nnz; 363 ms vs 14.0 ms at 10.0M). Training must stay in native code rather
+   than torch's sparse path.
+5. **Input-current scaling is a hard requirement, not a tuning detail.** LIF steady
+   state is `v_ss = v_rest + I`, so firing needs `I > v_th − v_rest = 15 mV`. Below
+   that the substrate is *completely silent* (measured rate 0.0000) and nothing
+   learns. AxonWeave's stock `ImageEncoder` normalises to O(1) — i.e. a silent brain.
+6. The Rust kernels are **serial**: no `rayon`/`par_iter` anywhere in `rust/src/*.rs`,
+   and `py.allow_threads` only releases the GIL. ~8× is unused on this 8C/16T box,
+   and parallelising them would speed the *existing* forward path independently of
+   any training work.
+
+**Effort for surrogate-gradient learning.** ~250–400 lines Rust (LIF recurrence
+backward, `dL/dW` scatter-accumulate), ~150 lines PyO3 + `autograd.Function` glue,
+~150 lines finite-difference gradient tests. The surrogate derivative math already
+exists and is unit-tested. Roughly a focused week. Design that keeps speed: wrap
+*per step* and let torch's autograd chain the timesteps — do not write BPTT in Rust.
+
+**Open question (not decided).** Whether to adopt AxonWeave at all, and if so:
+(a) use it frozen as a fixed sparse layer, (b) implement the Rust adjoint kernels,
+or (c) use snnTorch/Norse with the connectome loaded as a sparse weight matrix.
+
+**Unverified.** No Rust toolchain on this box (`cargo` absent), so the Rust kernels
+were read rather than built; the CSR comparison uses scipy as a stand-in proxy.
+
+---
+
 ## Rejected / not pursued
 
 - **Pruning the brain by reachability (2026-09-14).** Proposed as a speed-up, then measured
