@@ -10,6 +10,66 @@ and marked, never silently edited away.
 
 ---
 
+## D-009 — MNIST test task on the fly CNS: photoreceptor in, motor neuron out (2026-09-14)
+
+**Decision.** Train a classifier for **MNIST** on the fly connectome, using **LIF**
+neurons, with two hard architectural constraints:
+
+1. **The input must be projected into the fly brain's visual input** — not into
+   arbitrary or all neurons.
+2. **The output must be read from motor neurons** — explicitly *not* from all
+   neurons. The user's stated concern: a readout that samples everything would
+   "short circuit the entire fly brain from input to output".
+
+And one hard requirement: **the data must flow through a significant portion of the
+fly brain before the output is generated.** A task that can be solved without the
+brain doing the work does not count as a result.
+
+Node selection was **delegated to the agent** ("I'll leave it up to you to figure out
+which nodes to sample"). The agent's choice:
+
+| Role | Node set | Count |
+|---|---|---|
+| Input (visual) | `ol_sensory` — photoreceptors R1-R6, R7, R8 | 6,098 |
+| Output (motor) | `vnc_motor` | 708 |
+
+**Substrate: male-CNS v1.0** (local copy, `FlyHero-build/connectome/`), *not* FlyWire
+v783 / fly-brain. Reason: male-CNS is a single **whole-CNS** graph — brain *and* nerve
+cord — so it is the only available substrate containing photoreceptors and motor
+neurons in one connectivity matrix. FlyWire v783 is brain-only and has no motor
+neuron, which is why D-005 had to borrow motor neurons from male-CNS in the first
+place.
+
+**Why this satisfies the "must cross the brain" requirement.** The node sets are
+disjoint from each other and are the *only* points where the model touches the graph.
+The forced route is:
+
+```
+photoreceptors (ol_sensory, 6,098)
+  -> optic lobe intrinsic        (ol_intrinsic,  89,403)
+  -> visual projection           (visual_projection, 9,201)
+  -> central brain intrinsic     (cb_intrinsic,  32,164)
+  -> descending neurons          (descending_neuron, 1,314)
+  -> VNC intrinsic               (vnc_intrinsic, 13,161)
+  -> motor neurons               (vnc_motor, 708)
+```
+
+Reachability verified by graph closure (`tools/axonweave/`): **94.6% of the CNS
+(181,337 of 191,696 neurons) lies on some photoreceptor -> motor-neuron path**, and
+**all 708 motor neurons** are forward-reachable from the photoreceptors (28 hops
+forward, 23 hops back). The optic lobe intrinsic population is traversed 89,396 of
+89,403; all 1,314 descending neurons are reached.
+
+**Dynamics.** LIF, AxonWeave's parameterisation (`tau=20 ms`, `v_rest=-65 mV`,
+`v_th=-50 mV`, `v_reset=-70 mV`, `2 ms` refractory, `dt=1 ms`). Learning uses
+**surrogate gradients** through the spike (sigmoid surrogate, k=5.0) — the path E-001
+identified as missing from AxonWeave — because a hard spike has zero gradient and
+would leave the input projection untrainable.
+
+**Status.** Implementing.
+
+---
+
 ## D-008 — ANN→SNN migration by conversion: train ReLU, convert to IF (2026-09-14)
 
 **Decision.** The ANN→SNN migration is done by **conversion**, not surrogate-gradient
