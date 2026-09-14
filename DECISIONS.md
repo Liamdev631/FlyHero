@@ -10,6 +10,115 @@ and marked, never silently edited away.
 
 ---
 
+## D-010 — The trainable SNN substrate is `eonsystemspbc/fly-brain` (FlyWire v783) (2026-09-14)
+
+**Decision.** The substrate for the whole-brain spiking policy is
+**`eonsystemspbc/fly-brain`** — the FlyWire v783 AlphaLIF model (138,639 neurons,
+15,091,983 signed synapses, `dt = 0.1 ms`, Shiu et al. *Nature* 2024). Adopted **as a
+library to convert**, not as shipped: its PyTorch backend becomes the training model, its
+**GeNN backend** is the rollout engine.
+
+All 14 candidates in the *awesome-fly* "Brain models and embodied simulation" section were
+downloaded and evaluated; the survey is in `docs/brain-repo-evaluation.md`, and the
+per-alternative reasons are below so that **a future candidate can be scored against the
+same rubric** rather than re-litigated from scratch.
+
+### Why fly-brain — the decisive reason
+
+**It is the only candidate that is whole-brain *and* spiking *and* already carries a working
+surrogate gradient in Python.** E-001 established that AxonWeave — the substrate the
+D-009 direction pointed at — *lacks* surrogate-gradient learning and needs ~250–400 lines
+of Rust to get it, and **this box has no `cargo`**. fly-brain's `code/run_pytorch.py` ships
+the arctan surrogate already, correctly implemented and correctly detached at the reset:
+
+```python
+class LIFNeuron(nn.Module):
+    """Leaky Integrate-and-Fire neuron with surrogate gradient (ATan)."""
+    self.spike_gradient = self.ATan.apply
+    class ATan(torch.autograd.Function):
+        def forward(ctx, v):   spike = (v > 0).float()
+        def backward(ctx, g):  return 1/(1 + (np.pi*v).pow_(2)) * g
+```
+
+The one blocker that ruled out the previous substrate simply does not exist here.
+
+Supporting reasons:
+
+1. **Train and deploy are the same model definition, on different backends.** The
+   differentiable PyTorch path trains; **GeNN is the only backend measured above realtime
+   (1.84–2.04x, stable from 0.1 s to 100 s)** and rolls out. No other candidate offers both.
+2. **It already runs on this machine.** `docs/whole-cns-backend.md` records a verified run
+   here: `main.py --pytorch --t_run 0.1 --n_run 1` → success, 329 active neurons, 1,601
+   spikes, **0.005x realtime** on CPU. The path is proven end-to-end on this box.
+3. **It is real, maintained, licensed science.** Peer-reviewed (*Nature* 2024, 91% match
+   against recordings), GPL-2.0, 666 stars, pushed 2026-08-29, connectome ships in-repo.
+4. **It reaffirms D-004**, which already selected fly-brain as the whole-brain backend.
+
+### Why not the alternatives — one reason each
+
+| alternative | why not chosen |
+|---|---|
+| `erojasoficial-byte/fly-brain` | **Not a different model** — it vendors an *older* copy of the same fly-brain PyTorch backend (diffed: upstream has since added `perf_counter`, `voltage_stim`, `spike_io_enabled`). Adds nothing for training. Single-author Zenodo preprint, not peer-reviewed, and tested on an RTX 5090. Kept only as a reference for GPU Hebbian plasticity over the same CSR weights. |
+| `TuragaLab/flyvis` | **Not spiking.** Its network module is rate-based (`PPNeuronIGRSynapses`); grepping it for `spike`/`threshold`/`LIF`/`surrogate` finds nothing. A rate network cannot be trained *as an SNN*. Also optic-lobe only and contains no motor neuron. Kept as the pattern source for a training harness (`MultiTaskSolver`) — the engineering, not the model. |
+| `dhakalnirajan/axonweave` | **Training path unwired.** `frameworks/torch/block.py:82` still `detach()`s and the adapter still warns gradients are not enabled; the surrogate kernels exist in Rust but are connected to nothing. Closing that needs a Rust toolchain this box does not have. Re-checked: **unchanged since E-001** (still v0.1.0). Kept as the male-CNS access path — it has the right anatomy (708 VNC motor neurons). |
+| `eonfathom/FastFly` | **No autograd at all** — a forward-only CUDA/CuPy LIF simulator (no `backward`, no `train` anywhere), so it cannot be trained. Also **no LICENSE** and brain-only. |
+| `ruvnet/Connectome-OS` | **Explicitly not gradient-based** — "wiring read off a map, not inferred from gradients"; a Rust inspection/debugging layer, CUDA-free by design. **No LICENSE.** |
+| `philshiu/Drosophila_brain_model` | The Brian2 research code the model derives from: forward-only, no autograd, notebooks. **Dormant since 2024-09-14.** Superseded by fly-brain (same model, maintained, six backends). |
+| `seohyunjun/mps-malecns-model` | **Apple MPS only** — cannot run on the RTX 3050 at all. Also no LICENSE, self-described experimental, and its LIF constants are its own assumptions. |
+| `TuragaLab/flybody` | **A body, not a brain.** MuJoCo mesh + RL controllers (MLPs/PPO); contains no connectome neural model. FlyHero's action space is five buttons and a strum — there is no locomotion to simulate. |
+| `NeLy-EPFL/flygym` | **A body, not a brain.** NeuroMechFly v2 physics and RL environments; the "controller" is a CPG/MLP, not an SNN. Relevant only if a body interface is ever wanted. |
+| `abgnydn/webgpu-fly` | **Browser/WebGPU only**, no training path; self-declared "not a scientific simulator replacement"; 4 stars, one developer. |
+| `seven-monarchs/NeuroFly` | **No LICENSE** (cannot be a code base); unverified solo prototype; Brian2, so no autograd. |
+| `vaibhavkedarisetti/fruit-fly-lab` | **No LICENSE**; forward-only simulation; self-declared research prototype. |
+| `caparison1234/chimera` | **No LICENSE**; **larval** 1,373-neuron subset, not the adult whole brain; forward-only. |
+
+### The rubric — how to score a future candidate
+
+Any new substrate proposed later is scored on these eight criteria, in this order. The bar
+is that a candidate must satisfy 1–4 outright; 5–8 decide between survivors.
+
+1. **Spiking units** — real threshold/reset dynamics, not a rate network.
+2. **Gradient-trainable** — a surrogate spike function *and* weights that can be declared
+   parameters. (Check both: fly-brain ships the surrogate and still has no `nn.Parameter`.)
+3. **Scope** — whole-brain (or whole-CNS). Subsystem models are visual-path tools, not
+   policy substrates.
+4. **Runs on the target hardware** — NVIDIA/CUDA for the RTX 3050. Apple-MPS-only,
+   browser-only, and Rust-toolchain-gated projects are out on hardware grounds.
+5. **Motor output** — motor neurons present, or a documented bridge to them.
+6. **LICENSE present** — absent license disqualifies a code base outright. Six candidates
+   failed on this alone.
+7. **Maintenance** — recent commits, adoption, a maintainer who responds.
+8. **Evidence** — peer-reviewed, or at minimum shipping its own measured benchmark.
+
+Cheapest discriminator, checked first in practice: **grep the candidate for
+`nn.Parameter`/`requires_grad`.** That single check separates a *simulator* from a
+*trainable model*, and it is what E-001 and this survey both turned on.
+
+### Scope: what this changes and what it does not
+
+- **Reaffirms D-004** (fly-brain as the whole-brain backend) and **promotes it to the
+  trainable substrate**.
+- **The leg-motor-neuron problem stands.** FlyWire v783 is brain-only and its 110 motor
+  neurons are ingestion/neck/proboscis/antennal/eye — **no leg motor neurons**. The
+  five fret buttons and the strum therefore still need the **two-volume bridge** in
+  `docs/whole-cns-backend.md`: descending neurons → male-CNS VNC motor neurons
+  (D-005/D-006/D-007 unchanged).
+- **Does not by itself supersede D-009.** D-009 put the *MNIST test task* on male-CNS
+  precisely because male-CNS is one whole-CNS graph containing both photoreceptors and
+  motor neurons. Adopting fly-brain for the *game policy* leaves that task's substrate
+  unaddressed; see the open point below.
+
+**Status.** Decided. Implementing: promote the connectome to a trainable parameter in
+fly-brain's PyTorch backend, add optimizer + loss + the descending-neuron readout.
+
+**Open point (flagged, not decided here).** Whether D-009's MNIST task should also move to
+fly-brain + the descending-neuron bridge (one substrate, one code path, two-volume bridge
+needed), or stay on male-CNS (motor neurons in the same graph, but the training path
+unwired and Rust-gated). This is a change to what the model *is*, so it is recorded for
+review rather than resolved silently.
+
+---
+
 ## D-009 — MNIST test task on the fly CNS: photoreceptor in, motor neuron out (2026-09-14)
 
 **Decision.** Train a classifier for **MNIST** on the fly connectome, using **LIF**
@@ -278,11 +387,10 @@ were read rather than built; the CSR comparison uses scipy as a stand-in proxy.
 
 ## E-002 — All 14 awesome-fly "brain" repos surveyed; fly-brain recommended as the trainable substrate (2026-09-14)
 
-**Status: evaluated, NOT decided.** The user asked which of the brain-section repos is
-most suitable for training an entire fly-brain SNN to play FlyHero, with training to run
-later on an **RTX 3050** rather than this box. This entry records the survey and the
-recommendation; adoption is the user's call because it would change the substrate the
-project trains on.
+**Status: evaluated — superseded by D-010, which adopted the recommendation.** Kept as the
+survey of record (measurements and reasoning), not as an open question. The user asked which
+of the brain-section repos is most suitable for training an entire fly-brain SNN to play
+FlyHero, with training to run later on an **RTX 3050** rather than this box.
 
 **All 14 repos downloaded** (shallow) to `/home/liamb/projects/awesome-fly-repos/`
 (2.4 GB). Re-runnable via `tools/brain-repos/fetch_brain_repos.sh`; metadata in
@@ -367,12 +475,15 @@ Six repos (`NeuroFly`, `fruit-fly-lab`, `chimera`, `Connectome-OS`, `FastFly`,
 `mps-malecns-model`) ship **no license** and cannot be a code base;
 `mps-malecns-model` is also Apple-MPS-only and so disqualified by the target hardware.
 
-**Open question (not decided).** Whether to adopt fly-brain as the trainable substrate in
-place of the D-009 male-CNS/AxonWeave direction, and if so: (a) promote the connectome to a
-trainable parameter in the existing torch backend and add optimizer + loss + motor readout,
-(b) keep D-009's male-CNS substrate and port the ATan surrogate into it (male-CNS has the
-leg motor neurons in one graph, but the training path is unwired), or (c) train in fly-brain
-and bridge descending neurons → male-CNS VNC motor neurons per `docs/whole-cns-backend.md`.
+**Open question — resolved by D-010.** The question posed here was whether to adopt fly-brain
+as the trainable substrate in place of the D-009 male-CNS/AxonWeave direction, among (a)
+promote the connectome to a trainable parameter in the existing torch backend and add
+optimizer + loss + motor readout, (b) keep D-009's male-CNS substrate and port the ATan
+surrogate into it, or (c) train in fly-brain and bridge descending neurons → male-CNS VNC
+motor neurons per `docs/whole-cns-backend.md`. **D-010 chose fly-brain on path (a), with (c)
+as the bridge**; option (b) was declined because it needs a Rust toolchain this box lacks.
+The remaining question — whether D-009's *MNIST task* also moves off male-CNS — is carried
+forward as the open point in D-010.
 
 **Unverified.** The upstream benchmark CSV does **not** record which GPU produced its
 numbers, so "~1.9× GeNN" is attributable to the author's paper-grid machine, not to a named

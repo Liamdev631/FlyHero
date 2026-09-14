@@ -1,5 +1,10 @@
 # Whole-CNS backend: fly-brain (whole brain) + male-CNS (motor neurons)
 
+> **Settled by D-010:** fly-brain (FlyWire v783) is the trainable SNN substrate, with GeNN as
+> the rollout backend. FlyWire has no leg motor neurons, so the two-volume bridge described
+> below — descending neurons → male-CNS VNC motor neurons — is the permanent design, not a
+> workaround. Alternatives and their rejection reasons are in `docs/brain-repo-evaluation.md`.
+
 ## Why the backend changed
 
 flyvis is **optic-lobe only** — its outputs are visual interneurons (`T4`/`T5` etc.) and

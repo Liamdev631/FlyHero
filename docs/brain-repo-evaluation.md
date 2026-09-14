@@ -1,5 +1,10 @@
 # Brain-section repo evaluation: which substrate can we *train*?
 
+> **Status: DECIDED.** `eonsystemspbc/fly-brain` is adopted as the trainable substrate —
+> recorded as **D-010** in `DECISIONS.md`, which holds the declaration, the per-alternative
+> reasons, and the rubric. This document is the survey behind that decision: the evidence,
+> the measurements, and the comparison framework to score any **future** candidate against.
+
 **Question.** From the "Brain models and embodied simulation" section of
 [`cobanov/awesome-fly`](https://github.com/cobanov/awesome-fly) (14 repos), which is most
 suitable for training an **entire spiking neural network of the fly brain to play FlyHero**,
@@ -233,3 +238,53 @@ locomotion to simulate. Their brain→motor bridging is interesting reading, not
   `FastFly`, and `mps-malecns-model` ship **no license**, so they cannot be a code base.
   `fly-brain` is GPL-2.0 (copyleft — fine for a local model, worth noting if FlyHero
   artifacts are ever distributed); `flyvis` and `erojasoficial-byte/fly-brain` are MIT.
+
+---
+
+## Cross-comparison: scoring a future candidate
+
+When a new substrate appears, score it on the same eight criteria so the comparison stays
+apples-to-apples rather than being re-argued from scratch. Criteria 1–4 are pass/fail; 5–8
+separate survivors.
+
+| # | criterion | pass looks like |
+|---|---|---|
+| 1 | **Spiking units** | real threshold/reset dynamics — not a rate network |
+| 2 | **Gradient-trainable** | a surrogate spike function **and** weights declarable as parameters |
+| 3 | **Scope** | whole-brain, or whole-CNS |
+| 4 | **Target hardware** | runs on NVIDIA/CUDA (the RTX 3050 training box) |
+| 5 | **Motor output** | motor neurons present, or a documented bridge to them |
+| 6 | **LICENSE present** | any OSI license; absent disqualifies outright |
+| 7 | **Maintenance** | recent commits, adoption, responsive maintainer |
+| 8 | **Evidence** | peer-reviewed, or at minimum ships its own measured benchmark |
+
+The incumbent, scored, as the reference row:
+
+| candidate | 1 spiking | 2 trainable | 3 whole-brain | 4 CUDA | 5 motor | 6 license | 7 maint. | 8 evidence |
+|---|---|---|---|---|---|---|---|---|
+| **`eonsystemspbc/fly-brain`** | ✅ | ⚠️ surrogate ships, params not declared | ✅ 138,639 | ✅ torch + GeNN | ⚠️ DNs only — leg MNs need the bridge | ✅ GPL-2.0 | ✅ 666★, 2026-08-29 | ✅ *Nature* 2024 |
+
+**Practical checks, before reading any code.** These three greps are what actually decided
+this survey, and they take under a minute:
+
+```bash
+# 1. Does it train at all, or is it a simulator?  (the cheapest discriminator)
+grep -rn "nn.Parameter\|requires_grad" --include='*.py' <repo>/    # empty => simulator
+
+# 2. Is it spiking?  Check the MODEL dir, not README hits in analysis/.
+grep -rln "spike\|threshold\|LIF\|surrogate" <repo>/<model_dir>/
+
+# 3. Is there a license?
+ls <repo>/LICENSE <repo>/LICENSE.md <repo>/COPYING 2>/dev/null     # missing => disqualified
+```
+
+Two traps worth re-checking on any new candidate, both of which caught this survey: a repo
+can **ship a working surrogate gradient and still be untrainable** (criterion 2 needs both
+halves), and a **fork's vendored backend can be an older revision** than upstream — diff it
+before quoting it as current.
+
+If a future candidate passes all eight, the thing to compare against is not a feature list
+but these measured quantities: **realtime ratio per backend** (and whether the fast backend
+is differentiable — train and deploy may differ), **BPTT activation memory per timestep**,
+and **activity sparsity under a real stimulus**, which on this model class is ~0.3% of
+neurons.
