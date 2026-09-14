@@ -276,6 +276,114 @@ were read rather than built; the CSR comparison uses scipy as a stand-in proxy.
 
 ---
 
+## E-002 — All 14 awesome-fly "brain" repos surveyed; fly-brain recommended as the trainable substrate (2026-09-14)
+
+**Status: evaluated, NOT decided.** The user asked which of the brain-section repos is
+most suitable for training an entire fly-brain SNN to play FlyHero, with training to run
+later on an **RTX 3050** rather than this box. This entry records the survey and the
+recommendation; adoption is the user's call because it would change the substrate the
+project trains on.
+
+**All 14 repos downloaded** (shallow) to `/home/liamb/projects/awesome-fly-repos/`
+(2.4 GB). Re-runnable via `tools/brain-repos/fetch_brain_repos.sh`; metadata in
+`tools/brain-repos/repo-metadata.tsv`; full reasoning in `docs/brain-repo-evaluation.md`.
+Two repos share the name `fly-brain` — `eonsystemspbc/fly-brain` is upstream, and
+`erojasoficial-byte/fly-brain` was cloned as `fly-brain-erojasoficial`.
+
+**Recommendation: `eonsystemspbc/fly-brain`, as a library to convert — not as shipped.**
+It is the only repo that is whole-brain *and* spiking *and* peer-reviewed *and* already
+PyTorch `nn.Module`s *and* **already carrying a working surrogate gradient**:
+
+```python
+class LIFNeuron(nn.Module):
+    """Leaky Integrate-and-Fire neuron with surrogate gradient (ATan)."""
+    self.spike_gradient = self.ATan.apply
+    class ATan(torch.autograd.Function):
+        def forward(ctx, v):   spike = (v > 0).float()          # hard spike
+        def backward(ctx, g):  return 1/(1 + (np.pi*v).pow_(2)) * g   # soft surrogate
+```
+
+This is the piece E-001 found **missing** from AxonWeave (which needs ~250–400 lines of
+Rust to get it). Here it already exists, in pure Python — and `cargo` is absent on this
+box, so that difference is decisive. AlphaLIF over FlyWire v783: 138,639 neurons,
+15,091,983 signed synapses, `dt = 0.1 ms`, Shiu et al. *Nature* 2024. GPL-2.0, 666 stars,
+pushed 2026-08-29.
+
+**Measured backends** (upstream's own 720-row `benchmark-results.csv`, all
+`status=success`; `realtime_ratio` > 1.0 is faster than realtime):
+
+| backend | 1.0 s | 10 s | 100 s |
+|---|---|---|---|
+| **GeNN (GPU)** | 1.840 | 2.040 | 1.916 |
+| Brian2GeNN (GPU) | 0.838 | 0.812 | 0.810 |
+| NEST GPU | 0.782 | 0.783 | 0.790 |
+| Brian2 (CPU, compiled) | 0.346 | 0.403 | 0.335 |
+| Brian2CUDA (GPU) | 0.092 | 0.294 | 0.373 |
+| PyTorch (CUDA) | 0.153 | 0.154 | 0.154 |
+
+Two findings that generalise: **GeNN is the only backend above realtime and it is stable
+from 0.1 s to 100 s** (not a short-run artefact) — so GeNN for rollout. And **CUDA is not
+automatically fast**: both CUDA backends are *slower than the compiled CPU path*, because
+`dt = 0.1 ms` means 10,000 timesteps per simulated second and per-step launch overhead
+dominates. Do not reach for CUDA by default on this model class.
+
+**What fly-brain lacks, stated plainly.**
+1. **Nothing is trainable as shipped** — grepping `code/` for `nn.Parameter` or
+   `requires_grad` returns nothing. The connectome is a frozen `torch.sparse_csr_tensor`;
+   the surrogate is present but unused. Converting it is the work (see the RTX 3050 note).
+2. **No leg motor neurons** — FlyWire v783 is brain-only; its 110 MNs are ingestion/neck/
+   proboscis/antennal/eye. Same two-volume bridge as `docs/whole-cns-backend.md` and D-009.
+3. **It is a benchmark harness, not a training repo.**
+4. Activity under the benchmark stimulus is very sparse: **386 of 138,639 neurons (0.28%)**.
+   Measure firing rate under visual drive before diagnosing any training failure.
+
+**Hardware consequence for the RTX 3050 — the fit is poor, and this is the main caveat.**
+The relevant measured figure is the fork's single-row CSV: PyTorch+CUDA **0.0804** on its
+tested box (an RTX 5090 Laptop per its README), i.e. 1 s of brain time = 12.4 s wall.
+Bandwidth-scaled to a 3050 (~224 GB/s vs ~896) that is **~0.02×**, so an estimated
+**0.02–0.10× realtime (10–50× slower than realtime)**. Then:
+
+- **One 30 fps frame is 333 timesteps** (33.3 ms ÷ 0.1 ms) and costs ~415 ms wall on the
+  *author's* GPU — 12× over a 33 ms budget before any 3050 penalty. **The whole-brain model
+  at `dt = 0.1 ms` cannot drive the game live**; it is an offline/training substrate.
+- **A 3-minute song = 180 s brain time ≈ 37 min wall on the author's GPU, ~2.5 h scaled to
+  a 3050, per episode.** Online RL is not a plan; behavioural cloning from the existing
+  automation captures is.
+- **BPTT hits an 8 GB memory wall:** ~12.8 MB of state per batch item per timestep (the
+  1.8 ms delay buffer is 19 deep = 10.5 MB of it). batch 8 × T=100 → 10.2 GB stored,
+  over budget before gradients; batch 8 × T=10 → 1.0 GB, fits. **The 3050 forces truncated
+  BPTT (T ≈ 10, batch ≤ 8) or gradient checkpointing**, against a 333-step frame horizon.
+
+**Runner-ups, by role.** `TuragaLab/flyvis` has the only mature gradient-training harness
+(`MultiTaskSolver`) — copy the engineering, but it is **rate-based, not spiking**, and
+optic-lobe only, so it is not the substrate. `dhakalnirajan/axonweave` has the right
+anatomy (male-CNS whole CNS, incl. the 708 VNC motor neurons D-005 wants) but its training
+is still unwired — **re-checked and unchanged since E-001** (v0.1.0; `torch/block.py:82`
+still `detach()`s and still warns). `eonfathom/FastFly` is the fastest forward-only CUDA/CuPy
+path for consumer NVIDIA but has no autograd and no license. The body simulators
+(`flybody`, `flygym`, `chimera`, `NeuroFly`, `webgpu-fly`) are **not needed** — a rhythm
+game's action space is five buttons plus a strum; there is no locomotion to simulate.
+Six repos (`NeuroFly`, `fruit-fly-lab`, `chimera`, `Connectome-OS`, `FastFly`,
+`mps-malecns-model`) ship **no license** and cannot be a code base;
+`mps-malecns-model` is also Apple-MPS-only and so disqualified by the target hardware.
+
+**Open question (not decided).** Whether to adopt fly-brain as the trainable substrate in
+place of the D-009 male-CNS/AxonWeave direction, and if so: (a) promote the connectome to a
+trainable parameter in the existing torch backend and add optimizer + loss + motor readout,
+(b) keep D-009's male-CNS substrate and port the ATan surrogate into it (male-CNS has the
+leg motor neurons in one graph, but the training path is unwired), or (c) train in fly-brain
+and bridge descending neurons → male-CNS VNC motor neurons per `docs/whole-cns-backend.md`.
+
+**Unverified.** The upstream benchmark CSV does **not** record which GPU produced its
+numbers, so "~1.9× GeNN" is attributable to the author's paper-grid machine, not to a named
+device. The fork's CSV likewise omits the device; the RTX 5090 Laptop attribution comes
+from that repo's README "Tested" row only. The 3050 figures are **scaled from spec-sheet
+bandwidth, not measured on a 3050** — and the APU measurement in E-001 landed at ~half its
+spec sheet, so the low end is optimistic. Nothing here was executed: no GPU is present on
+this box and `torch` is not installed in the system interpreter.
+
+---
+
 ## Rejected / not pursued
 
 - **Pruning the brain by reachability (2026-09-14).** Proposed as a speed-up, then measured
